@@ -47,7 +47,18 @@ impl Runner for RunnerService {
         &self,
         request: tonic::Request<RunRequest>,
     ) -> std::result::Result<tonic::Response<RunResponse>, tonic::Status> {
-        println!("Run = {:?}", request);
+        println!("\n\n\n====================");
+        println!("Run = {:?}\n\n", request);
+        let run = request.get_ref();
+
+        println!("Run.arguments = {:?}", run.arguments);
+        println!("Run.environment_variables = {:?}", run.environment_variables);
+        println!("Run.working_directory = {:?}", run.working_directory);
+        println!("Run.stdout_path = {:?}", run.stdout_path);
+        println!("Run.stderr_path = {:?}", run.stderr_path);
+        println!("Run.input_root_directory = {:?}", run.input_root_directory);
+        println!("Run.temporary_directory = {:?}", run.temporary_directory);
+        println!("Run.server_logs_directory = {:?}", run.server_logs_directory);
 
         let mut runresp = RunResponse::default();
         runresp.exit_code = 42;
