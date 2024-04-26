@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package buildbarn.configuration.bb_runner;
+
+import "pkg/proto/configuration/credentials/credentials.proto";
+import "pkg/proto/configuration/global/global.proto";
+import "pkg/proto/configuration/grpc/grpc.proto";
+
+option go_package = "github.com/buildbarn/bb-remote-execution/pkg/proto/configuration/bb_runner";
+
+message ApplicationConfiguration {
+  // Directory where builds take place.
+  string build_directory_path = 1;
+
+  // gRPC servers to spawn to listen for requests from bb_worker.
+  repeated buildbarn.configuration.grpc.ServerConfiguration grpc_servers = 2;
+
+  // Temporary directories that should be cleaned up after a build action
+  // (e.g. /tmp).
+  repeated string clean_temporary_directories = 3;
+
+  // Common configuration options that apply to all Buildbarn binaries.
+  buildbarn.configuration.global.Configuration global = 4;
+
+  // Run every build action with the TMPDIR environment variable set to
+  // point to a location inside the build directory. This causes
+  // temporary files to be cleaned up automatically on the build
+  // action's behalf, assuming it properly respects the environment
+  // variable.
+  bool set_tmpdir_environment_variable = 5;
+
+  // Optional helper process for resolving /tmp.
+  buildbarn.configuration.grpc.ClientConfiguration
+      temporary_directory_installer = 6;
+
+  // Chroot into the input root to run commands. This option can be used
+  // if the input root contains a full userland installation. This
+  // feature is used by the BuildStream build system.
+  bool chroot_into_input_root = 7;
+
+  // Kill processes that are left behind by build actions that are
+  // running in the background.
+  //
+  // Enabling this feature causes all processes to be killed that run as
+  // the same user ID as bb_runner (or the one configured through
+  // 'run_commands_as') and were spawned after bb_runner. This feature
+  // must not be enabled when the same user ID is used for other
+  // purposes (e.g., running multiple bb_runners), as this may cause
+  // unrelated processes to be killed.
+  bool clean_process_table = 8;
+
+  // Was filesystem_writability_checker which has been removed.
+  reserved 9;
+
+  // List of paths that need to exist on the system for the runner to be
+  // considered healthy. This option may be set to let a runner stop
+  // accepting more work in case a remote file system becomes
+  // unavailable.
+  repeated string readiness_checking_pathnames = 10;
+
+  // When set, run commands as another user. On most platforms, this
+  // requires bb_runner to run as root.
+  buildbarn.configuration.credentials.UNIXCredentialsConfiguration
+      run_commands_as = 11;
+
+  // System temporary directories (e.g., /tmp) that should be removed
+  // and replaced with symbolic links pointing into the temporary
+  // directory that bb_worker allocates for an action.
+  //
+  // This option is similar to clean_temporary_directories, except that
+  // it ensures that temporary directories point to a location managed
+  // by bb_worker. The advantage of this approach is that it makes it
+  // easier to apply resource limits to disk consumption of build
+  // actions, especially when bb_worker is configured to use FUSE.
+  //
+  // It is only safe to enable this option when this runner executes
+  // only up to a single command concurrently.
+  repeated string symlink_temporary_directories = 12;
+
+  // Run a clean command with arguments. This option allows a custom clean
+  // operation that can perform arbitrary cleaning desired on the system.
+  // This could be useful reset state that cannot be changed using the other
+  // built-in options (e.g. stopping docker containers left running by an
+  // action).
+  //
+  // This command runs when the runner transitions from being idle to running
+  // at least one action, and vice versa. It is also called periodically
+  // whenever the runner is idle.
+  //
+  // Caution: since this option executes a command in a separate process
+  // there is an inherent performance penalty. If possible, use the built-in
+  // cleaning options that are handled in-process for optimal performance.
+  repeated string run_command_cleaner = 13;
+
+  // If set, automatically inject DEVELOPER_DIR and SDKROOT environment
+  // variables based on the action's values of the APPLE_SDK_PLATFORM,
+  // APPLE_SDK_VERSION_OVERRIDE, and XCODE_VERSION_OVERRIDE environment
+  // variables.
+  //
+  // Tools such as /usr/bin/cc, /usr/bin/ld, etc. that ship with macOS
+  // are stubs that forward their calls to copies that are part of
+  // Xcode. As it is possible to install multiple versions of Xcode at
+  // different locations on the file system, these stubs will use the
+  // DEVELOPER_DIR and SDKROOT environment variables to determine which
+  // copy of Xcode to use.
+  //
+  // Because the location at which Xcode is installed may differ between
+  // local and remote execution environments, Bazel does not set the
+  // DEVELOPER_DIR and SDKROOT environment variables directly. Instead,
+  // it sets environment variables APPLE_SDK_PLATFORM,
+  // APPLE_SDK_VERSION_OVERRIDE and XCODE_VERSION_OVERRIDE. The remote
+  // worker is responsible for interpreting these environment variables
+  // and resolving those to the location of the intended copy of Xcode
+  // and the desired SDK.
+  //
+  // This option can be used to specify how values of
+  // XCODE_VERSION_OVERRIDE translate to values of DEVELOPER_DIR. The
+  // value of SDKROOT is obtained by invoking the xcrun utility with
+  // DEVELOPER_DIR set.
+  //
+  // Example:
+  //
+  //   {
+  //     "12.5.1.12E507": "/Applications/Xcode12.app/Contents/Developer",
+  //     "13.4.1.13F100": "/Applications/Xcode13.app/Contents/Developer",
+  //     "14.2.0.14C18": "/Applications/Xcode14.app/Contents/Developer"
+  //   }
+  //
+  // More details:
+  // https://blog.bazel.build/2020/02/26/xcode-selection.html
+  // https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/exec/local/XcodeLocalEnvProvider.java
+  // https://www.smileykeith.com/2021/03/08/locking-xcode-in-bazel/
+  map<string, string> apple_xcode_developer_directories = 14;
+}
