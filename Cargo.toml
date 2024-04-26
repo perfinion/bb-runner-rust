@@ -3,6 +3,16 @@ name = "bb_runner"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "bb_runner"
+path = "src/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tonic = "0.11"
+prost = "0.12"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+[build-dependencies]
+tonic-build = "0.11"
