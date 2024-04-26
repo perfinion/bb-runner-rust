@@ -1,7 +1,18 @@
+#![cfg_attr(not(unix), allow(unused_imports))]
+
+use std::path::Path;
 use tonic::{transport::Server, Request, Response, Status};
+
+#[cfg(unix)]
+use tokio::net::UnixListener;
+#[cfg(unix)]
+use tokio_stream::wrappers::UnixListenerStream;
+#[cfg(unix)]
+use tonic::transport::server::UdsConnectInfo;
 
 use buildbarn_runner::runner_server::{Runner, RunnerServer};
 use buildbarn_runner::{CheckReadinessRequest, RunRequest, RunResponse};
+
 
 pub mod buildbarn_runner {
     tonic::include_proto!("buildbarn.runner");
@@ -18,21 +29,45 @@ impl Runner for RunnerService {
         &self,
         request: tonic::Request<CheckReadinessRequest>,
     ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-        unimplemented!{}
+
+        let readyreq = request.get_ref();
+
+        println!("CheckReadiness = {:?}", request);
+
+        if (Path::new(&readyreq.path).exists()) {
+            println!("CheckReadiness.path exists = {:?}", readyreq.path);
+            return Ok(tonic::Response::new(()));
+        }
+
+        println!("CheckReadiness.path not found = {:?}", readyreq.path);
+        Err(Status::internal("not ready"))
     }
+
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,
     ) -> std::result::Result<tonic::Response<RunResponse>, tonic::Status> {
-        unimplemented!{}
+        println!("Run = {:?}", request);
+
+        let mut runresp = RunResponse::default();
+        runresp.exit_code = 42;
+
+        Ok(tonic::Response::new(runresp))
     }
 }
 
 
+#[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Hello, world from bb_runner!");
-    let addr = "[::1]:10000".parse().unwrap();
+
+    let path = "/tmp/tonic/helloworld";
+
+    std::fs::create_dir_all(Path::new(path).parent().unwrap())?;
+
+    let socket = UnixListener::bind(path)?;
+    let socket_stream = UnixListenerStream::new(socket);
 
     let bb_runner = RunnerService {
         // features: Arc::new(data::load()),
@@ -48,8 +83,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .add_service(svc)
-        .serve(addr)
+        .serve_with_incoming(socket_stream)
         .await?;
 
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn main() {
+    panic!("Only works on unix!");
 }
