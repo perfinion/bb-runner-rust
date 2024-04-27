@@ -13,7 +13,10 @@ echo Args:
 echo $@
 
 echo Done!
+exit 0
 EOF
+
+chmod +x test/run.sh
 
 
 echo -e "\nRun with testing data:"
@@ -25,7 +28,7 @@ grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/hellow
   ],
   "environment_variables": {
     "HOME": "${HOME}",
-    "TMP": "${TMP}"
+    "TMP": "${TMP:-/tmp}"
   },
   "working_directory": "test/",
   "stdout_path": "stdout.txt",

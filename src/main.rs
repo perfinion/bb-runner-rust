@@ -1,6 +1,7 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use tonic::{transport::Server, Request, Response, Status};
 
 #[cfg(unix)]
@@ -60,8 +61,37 @@ impl Runner for RunnerService {
         println!("Run.temporary_directory = {:?}", run.temporary_directory);
         println!("Run.server_logs_directory = {:?}", run.server_logs_directory);
 
+        let mut cmd_cwd = PathBuf::new();
+        cmd_cwd.push(&run.input_root_directory);
+        cmd_cwd.push(&run.working_directory);
+
+        let mut cmdpath = PathBuf::new();
+        cmdpath.push(&run.input_root_directory);
+        cmdpath.push(&run.working_directory);
+        cmdpath.push(&run.arguments[0]);
+
+        println!("Running cmd: {:?}", cmdpath);
+
+        // let command = Command::new(&run.arguments[0])
+        let command = Command::new(&cmdpath)
+            .args(&run.arguments[1..])
+            .current_dir(&cmd_cwd)
+            .output()
+            .expect("Failed to execute command");
+            // .stdout(Stdio::piped())
+
+        println!("Return: {}", command.status);
+        println!("==== Command stdout: ====");
+        println!("{:?}", String::from_utf8_lossy(&command.stdout.as_slice()));
+        println!("==== Command stderr: ====");
+        println!("{:?}", String::from_utf8_lossy(&command.stderr.as_slice()));
+        println!("==== End ====");
+
         let mut runresp = RunResponse::default();
-        runresp.exit_code = 42;
+        match command.status.code() {
+            Some(code) => runresp.exit_code = code,
+            None => return Err(Status::internal("No Exit Code")),
+        }
 
         Ok(tonic::Response::new(runresp))
     }
