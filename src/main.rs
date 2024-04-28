@@ -1,8 +1,9 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{transport::Server, Status};
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -35,7 +36,7 @@ impl Runner for RunnerService {
 
         println!("CheckReadiness = {:?}", request);
 
-        if (Path::new(&readyreq.path).exists()) {
+        if Path::new(&readyreq.path).exists() {
             println!("CheckReadiness.path exists = {:?}", readyreq.path);
             return Ok(tonic::Response::new(()));
         }
@@ -44,22 +45,24 @@ impl Runner for RunnerService {
         Err(Status::internal("not ready"))
     }
 
+    #[cfg(unix)]
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,
     ) -> std::result::Result<tonic::Response<RunResponse>, tonic::Status> {
-        println!("\n\n\n====================");
-        println!("Run = {:?}\n\n", request);
+        let conn_info = request.extensions().get::<UdsConnectInfo>().unwrap();
         let run = request.get_ref();
 
-        println!("Run.arguments = {:?}", run.arguments);
-        println!("Run.environment_variables = {:?}", run.environment_variables);
-        println!("Run.working_directory = {:?}", run.working_directory);
-        println!("Run.stdout_path = {:?}", run.stdout_path);
-        println!("Run.stderr_path = {:?}", run.stderr_path);
-        println!("Run.input_root_directory = {:?}", run.input_root_directory);
-        println!("Run.temporary_directory = {:?}", run.temporary_directory);
-        println!("Run.server_logs_directory = {:?}", run.server_logs_directory);
+        println!("=== Run ===");
+        println!("\t{:?}", conn_info);
+        println!("\targuments = {:?}", run.arguments);
+        println!("\tenvironment_variables = {:?}", run.environment_variables);
+        println!("\tworking_directory = {:?}", run.working_directory);
+        println!("\tstdout_path = {:?}", run.stdout_path);
+        println!("\tstderr_path = {:?}", run.stderr_path);
+        println!("\tinput_root_directory = {:?}", run.input_root_directory);
+        println!("\ttemporary_directory = {:?}", run.temporary_directory);
+        println!("\tserver_logs_directory = {:?}", run.server_logs_directory);
 
         let mut cmd_cwd = PathBuf::new();
         cmd_cwd.push(&run.input_root_directory);
@@ -99,31 +102,32 @@ impl Runner for RunnerService {
     }
 }
 
+fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::remove_file(path).unwrap_or_else(|error| {
+        if error.kind() != ErrorKind::NotFound {
+            panic!("Failed to remove socket: {:?}", error);
+        }
+    });
+
+    let socket = UnixListener::bind(path)?;
+    Ok(UnixListenerStream::new(socket))
+}
 
 #[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Hello, world from bb_runner!");
 
-    let path = "/tmp/tonic/helloworld";
+    let path = Path::new("/tmp/tonic/helloworld");
+    let socket_stream: UnixListenerStream = bind_socket(path).unwrap_or_else(|error| {
+        panic!("Failed to create socket: {:?}", error);
+    });
 
-    std::fs::create_dir_all(Path::new(path).parent().unwrap())?;
-
-    let socket = UnixListener::bind(path)?;
-    let socket_stream = UnixListenerStream::new(socket);
-
-    let bb_runner = RunnerService {
-        // features: Arc::new(data::load()),
-    };
-
-    println!("Service created!");
-
+    let bb_runner = RunnerService {};
     let svc = RunnerServer::new(bb_runner);
 
-    println!("Server created!");
-
-    println!("Running Server ...");
-
+    println!("Starting Runner ...");
     Server::builder()
         .add_service(svc)
         .serve_with_incoming(socket_stream)
