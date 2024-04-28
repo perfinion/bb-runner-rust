@@ -76,6 +76,8 @@ impl Runner for RunnerService {
         let command = Command::new(&cmdpath)
             .args(&run.arguments[1..])
             .current_dir(&cmd_cwd)
+            .env_clear()
+            .envs(&run.environment_variables)
             .output()
             .expect("Failed to execute command");
             // .stdout(Stdio::piped())

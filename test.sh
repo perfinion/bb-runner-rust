@@ -13,6 +13,7 @@ echo Args:
 echo $@
 
 echo Done!
+env
 exit 0
 EOF
 
