@@ -4,7 +4,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tonic::{transport::Server, Status};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::fs::File;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -74,6 +75,12 @@ impl Runner for RunnerService {
         cmdpath.push(&run.working_directory);
         cmdpath.push(&run.arguments[0]);
 
+        let mut stdout_path = PathBuf::new();
+        stdout_path.push(&run.input_root_directory);
+        stdout_path.push(&run.working_directory);
+        stdout_path.push(&run.stdout_path);
+        let mut stdout_file = File::create(stdout_path).unwrap();
+
         println!("Running cmd: {:?}", cmdpath);
 
         let command = Command::new(&cmdpath)
@@ -93,7 +100,6 @@ impl Runner for RunnerService {
 
         println!("Started process: {}", child.id());
 
-        // drop(child.stdin);
         let exit_status = match child.wait() {
             Ok(e) => e,
             Err(_) => return Err(Status::internal("Wait failed")),
@@ -114,6 +120,7 @@ impl Runner for RunnerService {
         println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
         println!("{}", stdout);
+        stdout_file.write_all(stdout.as_bytes());
         println!("==== Command stderr: ====");
         println!("{}", stderr);
         println!("==== End ====");
