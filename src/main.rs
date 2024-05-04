@@ -4,6 +4,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tonic::{transport::Server, Status};
+use std::io::Read;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -75,25 +76,50 @@ impl Runner for RunnerService {
 
         println!("Running cmd: {:?}", cmdpath);
 
-        // let command = Command::new(&run.arguments[0])
         let command = Command::new(&cmdpath)
             .args(&run.arguments[1..])
             .current_dir(&cmd_cwd)
             .env_clear()
             .envs(&run.environment_variables)
-            .output()
-            .expect("Failed to execute command");
-            // .stdout(Stdio::piped())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
 
-        println!("Return: {}", command.status);
+        let mut child = match command {
+            Ok(c) => c,
+            Err(_) => return Err(Status::internal("Spawn failed")),
+        };
+
+        println!("Started process: {}", child.id());
+
+        // drop(child.stdin);
+        let exit_status = match child.wait() {
+            Ok(e) => e,
+            Err(_) => return Err(Status::internal("Wait failed")),
+        };
+
+        let mut stdout = String::new();
+        match child.stdout {
+            Some(mut s) => { let _ = s.read_to_string(&mut stdout); },
+            None => {},
+        };
+
+        let mut stderr = String::new();
+        match child.stderr {
+            Some(mut s) => { let _ = s.read_to_string(&mut stderr); },
+            None => {},
+        };
+
+        println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
-        println!("{:?}", String::from_utf8_lossy(&command.stdout.as_slice()));
+        println!("{}", stdout);
         println!("==== Command stderr: ====");
-        println!("{:?}", String::from_utf8_lossy(&command.stderr.as_slice()));
+        println!("{}", stderr);
         println!("==== End ====");
 
         let mut runresp = RunResponse::default();
-        match command.status.code() {
+        match exit_status.code() {
             Some(code) => runresp.exit_code = code,
             None => return Err(Status::internal("No Exit Code")),
         }
