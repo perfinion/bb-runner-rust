@@ -9,11 +9,13 @@ cat >test/run.sh <<EOF
 echo Test Child
 echo Test Child stderr >&2
 
-echo Args:
-echo $@
+echo "PWD: [\${PWD}]"
+pwd
+echo "Args: [\$@]"
 
 echo Done!
 env
+sleep \${1:-2}
 exit 0
 EOF
 
@@ -25,9 +27,11 @@ grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/hellow
 {
   "arguments": [
     "run.sh",
+    "5",
     "bar"
   ],
   "environment_variables": {
+    "AN_ENV_VAR": "hello world",
     "HOME": "${HOME}",
     "TMP": "${TMP:-/tmp}"
   },
@@ -39,6 +43,8 @@ grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/hellow
   "server_logs_directory": "test/logs"
 }
 EOM
+
+ls -al ./test/
 
 exit
 

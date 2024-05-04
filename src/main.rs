@@ -81,7 +81,7 @@ impl Runner for RunnerService {
         stdout_path.push(&run.stdout_path);
         let mut stdout_file = File::create(stdout_path).unwrap();
 
-        println!("Running cmd: {:?}", cmdpath);
+        println!("Running cmd: {:?} {:?}", cmdpath, &run.arguments[1..]);
 
         let command = Command::new(&cmdpath)
             .args(&run.arguments[1..])
@@ -120,7 +120,7 @@ impl Runner for RunnerService {
         println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
         println!("{}", stdout);
-        stdout_file.write_all(stdout.as_bytes());
+        let _ = stdout_file.write_all(stdout.as_bytes());
         println!("==== Command stderr: ====");
         println!("{}", stderr);
         println!("==== End ====");
