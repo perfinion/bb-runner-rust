@@ -27,7 +27,7 @@ grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/hellow
 {
   "arguments": [
     "run.sh",
-    "5",
+    "$(( $RANDOM % 5 + 1 ))",
     "bar"
   ],
   "environment_variables": {

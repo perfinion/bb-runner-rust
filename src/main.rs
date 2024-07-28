@@ -66,37 +66,20 @@ impl Runner for RunnerService {
         println!("\ttemporary_directory = {:?}", run.temporary_directory);
         println!("\tserver_logs_directory = {:?}", run.server_logs_directory);
 
-        let mut cmd_cwd = PathBuf::new();
-        cmd_cwd.push(&run.input_root_directory);
-        cmd_cwd.push(&run.working_directory);
+        let mut child = spawn_child(&run).await.unwrap();
 
-        let mut cmdpath = PathBuf::new();
-        cmdpath.push(&run.input_root_directory);
-        cmdpath.push(&run.working_directory);
-        cmdpath.push(&run.arguments[0]);
+        // if let Ok(mut c) = command.spawn() {
+        //     //child.wait().expect("command wasn't running");
+        //     child = c;
+        //     println!("Child has finished its execution!");
+        // } else {
+        //     return Err(Status::internal("Spawn failed"));
+        // }
 
-        let mut stdout_path = PathBuf::new();
-        stdout_path.push(&run.input_root_directory);
-        stdout_path.push(&run.working_directory);
-        stdout_path.push(&run.stdout_path);
-        let mut stdout_file = File::create(stdout_path).unwrap();
-
-        println!("Running cmd: {:?} {:?}", cmdpath, &run.arguments[1..]);
-
-        let command = Command::new(&cmdpath)
-            .args(&run.arguments[1..])
-            .current_dir(&cmd_cwd)
-            .env_clear()
-            .envs(&run.environment_variables)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-
-        let mut child = match command {
-            Ok(c) => c,
-            Err(_) => return Err(Status::internal("Spawn failed")),
-        };
+        // let mut child = match command.spawn() {
+        //     Ok(mut c) => c,
+        //     Err(_) => return Err(Status::internal("Spawn failed")),
+        // };
 
         println!("Started process: {}", child.id());
 
@@ -117,12 +100,27 @@ impl Runner for RunnerService {
             None => {},
         };
 
+        let stdout_path: PathBuf = [
+            &run.input_root_directory,
+            &run.working_directory,
+            &run.stdout_path,
+        ].iter().collect();
+        let mut stdout_file = File::create(stdout_path).unwrap();
+
+        let stderr_path: PathBuf = [
+            &run.input_root_directory,
+            &run.working_directory,
+            &run.stderr_path,
+        ].iter().collect();
+        let mut stderr_file = File::create(stderr_path).unwrap();
+
         println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
         println!("{}", stdout);
         let _ = stdout_file.write_all(stdout.as_bytes());
         println!("==== Command stderr: ====");
         println!("{}", stderr);
+        let _ = stderr_file.write_all(stderr.as_bytes());
         println!("==== End ====");
 
         let mut runresp = RunResponse::default();
@@ -133,6 +131,43 @@ impl Runner for RunnerService {
 
         Ok(tonic::Response::new(runresp))
     }
+}
+
+async fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
+
+    let cwd: PathBuf = [
+        &run.input_root_directory,
+        &run.working_directory,
+    ].iter().collect();
+
+    let arg0: PathBuf = [
+        &run.input_root_directory,
+        &run.working_directory,
+        &run.arguments[0],
+    ].iter().collect();
+
+    println!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
+
+    let mut command = Command::new(&arg0);
+    command.args(&run.arguments[1..]);
+    command.current_dir(&cwd);
+    command.env_clear();
+    command.envs(&run.environment_variables);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+
+    // let mut child;
+    if let Ok(c) = command.spawn() {
+        //child.wait().expect("command wasn't running");
+        // child = c;
+        println!("Child has finished its execution!");
+        return Ok(c);
+    } else {
+        return Err(Status::internal("Spawn failed"));
+    }
+
+    // return Ok(child);
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Error>> {
