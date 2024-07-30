@@ -20,3 +20,4 @@ Cargo.lock
 
 # Worker sandbox test dir
 /test
+/test_base*/

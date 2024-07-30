@@ -1,12 +1,22 @@
 #!/bin/bash
 
-rm -rf test/
-mkdir -p test/{tmp,logs}
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
 
-cat >test/run.sh <<EOF
+[[ -f ./build.rs ]] || die "Must be run from base of repo"
+
+create_test_files() {
+    dir="$1"
+
+    rm -rf ./${dir}/
+    mkdir -p ./${dir}/{tmp,logs}
+
+    cat >./${dir}/run.sh <<EOF
 #!/bin/bash
 
-echo Test Child
+echo Test Child in ${dir}
 echo Test Child stderr >&2
 
 echo "PWD: [\${PWD}]"
@@ -19,15 +29,24 @@ sleep \${1:-2}
 exit 0
 EOF
 
-chmod +x test/run.sh
+    chmod +x ./${dir}/run.sh
+}
 
 
-echo -e "\nRun with testing data:"
-grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/Run <<EOM
+create_test_files test_base1
+create_test_files test_base2
+
+
+send_run() {
+    dir="$1"
+    time="$(( $RANDOM % 3 + ${2:-1} ))"
+
+    echo -e "\nRunning ${dir} with timeout=${time} and input data:"
+    time grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/Run <<EOM
 {
   "arguments": [
     "run.sh",
-    "$(( $RANDOM % 5 + 1 ))",
+    "${time}",
     "bar"
   ],
   "environment_variables": {
@@ -35,16 +54,23 @@ grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/hellow
     "HOME": "${HOME}",
     "TMP": "${TMP:-/tmp}"
   },
-  "working_directory": "test/",
+  "working_directory": "${dir}/",
   "stdout_path": "stdout.txt",
   "stderr_path": "stderr.txt",
   "input_root_directory": "$(pwd)",
   "temporary_directory": "/tmp",
-  "server_logs_directory": "test/logs"
+  "server_logs_directory": "${dir}/logs"
 }
 EOM
 
-ls -al ./test/
+    ls -al ./${dir}/
+}
+
+( sleep 1; send_run test_base1 5 ) &
+send_run test_base2 5
+wait
+
+echo "Both finished!"
 
 exit
 

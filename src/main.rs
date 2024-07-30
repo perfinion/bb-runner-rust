@@ -83,23 +83,7 @@ impl Runner for RunnerService {
 
         println!("Started process: {}", child.id());
 
-        let exit_status = match child.wait() {
-            Ok(e) => e,
-            Err(_) => return Err(Status::internal("Wait failed")),
-        };
-
         let mut stdout = String::new();
-        match child.stdout {
-            Some(mut s) => { let _ = s.read_to_string(&mut stdout); },
-            None => {},
-        };
-
-        let mut stderr = String::new();
-        match child.stderr {
-            Some(mut s) => { let _ = s.read_to_string(&mut stderr); },
-            None => {},
-        };
-
         let stdout_path: PathBuf = [
             &run.input_root_directory,
             &run.working_directory,
@@ -107,12 +91,28 @@ impl Runner for RunnerService {
         ].iter().collect();
         let mut stdout_file = File::create(stdout_path).unwrap();
 
+        let mut stderr = String::new();
         let stderr_path: PathBuf = [
             &run.input_root_directory,
             &run.working_directory,
             &run.stderr_path,
         ].iter().collect();
         let mut stderr_file = File::create(stderr_path).unwrap();
+
+        let exit_status = match wait_child(&mut child).await {
+            Ok(e) => e,
+            Err(_) => return Err(Status::internal("Wait failed")),
+        };
+
+        match child.stdout {
+            Some(mut s) => { let _ = s.read_to_string(&mut stdout); },
+            None => {},
+        };
+
+        match child.stderr {
+            Some(mut s) => { let _ = s.read_to_string(&mut stderr); },
+            None => {},
+        };
 
         println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
@@ -131,6 +131,15 @@ impl Runner for RunnerService {
 
         Ok(tonic::Response::new(runresp))
     }
+}
+
+async fn wait_child(child: &mut std::process::Child) -> Result<std::process::ExitStatus, tonic::Status> {
+    let exit_status = match child.wait() {
+        Ok(e) => e,
+        Err(_) => return Err(Status::internal("Wait failed")),
+    };
+
+    return Ok(exit_status)
 }
 
 async fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
