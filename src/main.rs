@@ -1,11 +1,12 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
+use std::fs::File;
 use std::io::ErrorKind;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tokio::time::{sleep, Duration};
 use tonic::{transport::Server, Status};
-use std::io::{Read, Write};
-use std::fs::File;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -134,12 +135,18 @@ impl Runner for RunnerService {
 }
 
 async fn wait_child(child: &mut std::process::Child) -> Result<std::process::ExitStatus, tonic::Status> {
-    let exit_status = match child.wait() {
-        Ok(e) => e,
-        Err(_) => return Err(Status::internal("Wait failed")),
-    };
+    drop(child.stdin.take());
 
-    return Ok(exit_status)
+    loop {
+        match child.try_wait() {
+            Ok(Some(e)) => return Ok(e),
+            Ok(None) => {},
+            Err(_) => break,
+        };
+        println!("w{}", child.id());
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+    Err(Status::internal("Wait failed"))
 }
 
 async fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
