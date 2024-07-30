@@ -26,6 +26,7 @@ echo "Args: [\$@]"
 echo Done!
 env
 sleep \${1:-2}
+ls -al
 exit 0
 EOF
 
@@ -71,6 +72,17 @@ send_run test_base2 5
 wait
 
 echo "Both finished!"
+
+echo "=== test_base1/stdout.txt"
+grep -H . test_base1/stdout.txt
+echo "=== test_base1/stderr.txt"
+grep -H . test_base1/stderr.txt
+
+echo
+echo "=== test_base2/stdout.txt"
+grep -H . test_base2/stdout.txt
+echo "=== test_base2/stderr.txt"
+grep -H . test_base2/stderr.txt
 
 exit
 

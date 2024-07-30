@@ -67,43 +67,15 @@ impl Runner for RunnerService {
         println!("\ttemporary_directory = {:?}", run.temporary_directory);
         println!("\tserver_logs_directory = {:?}", run.server_logs_directory);
 
-        let mut child = spawn_child(&run).await.unwrap();
+        let mut stdout = String::new();
+        let mut stdout_file = workdir_file(&run, &run.stdout_path)?;
+        let mut stderr = String::new();
+        let mut stderr_file = workdir_file(&run, &run.stderr_path)?;
 
-        // if let Ok(mut c) = command.spawn() {
-        //     //child.wait().expect("command wasn't running");
-        //     child = c;
-        //     println!("Child has finished its execution!");
-        // } else {
-        //     return Err(Status::internal("Spawn failed"));
-        // }
-
-        // let mut child = match command.spawn() {
-        //     Ok(mut c) => c,
-        //     Err(_) => return Err(Status::internal("Spawn failed")),
-        // };
-
+        let mut child = spawn_child(&run)?;
         println!("Started process: {}", child.id());
 
-        let mut stdout = String::new();
-        let stdout_path: PathBuf = [
-            &run.input_root_directory,
-            &run.working_directory,
-            &run.stdout_path,
-        ].iter().collect();
-        let mut stdout_file = File::create(stdout_path).unwrap();
-
-        let mut stderr = String::new();
-        let stderr_path: PathBuf = [
-            &run.input_root_directory,
-            &run.working_directory,
-            &run.stderr_path,
-        ].iter().collect();
-        let mut stderr_file = File::create(stderr_path).unwrap();
-
-        let exit_status = match wait_child(&mut child).await {
-            Ok(e) => e,
-            Err(_) => return Err(Status::internal("Wait failed")),
-        };
+        let exit_status = wait_child(&mut child).await?;
 
         match child.stdout {
             Some(mut s) => { let _ = s.read_to_string(&mut stdout); },
@@ -134,6 +106,16 @@ impl Runner for RunnerService {
     }
 }
 
+fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
+    let wdpath: PathBuf = [
+        &run.input_root_directory,
+        &run.working_directory,
+        &wdname,
+    ].iter().collect();
+
+    File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
+}
+
 async fn wait_child(child: &mut std::process::Child) -> Result<std::process::ExitStatus, tonic::Status> {
     drop(child.stdin.take());
 
@@ -149,7 +131,7 @@ async fn wait_child(child: &mut std::process::Child) -> Result<std::process::Exi
     Err(Status::internal("Wait failed"))
 }
 
-async fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
+fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
 
     let cwd: PathBuf = [
         &run.input_root_directory,
@@ -173,17 +155,7 @@ async fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Sta
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    // let mut child;
-    if let Ok(c) = command.spawn() {
-        //child.wait().expect("command wasn't running");
-        // child = c;
-        println!("Child has finished its execution!");
-        return Ok(c);
-    } else {
-        return Err(Status::internal("Spawn failed"));
-    }
-
-    // return Ok(child);
+    command.spawn().or(Err(Status::internal("Failed to spawn child")))
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Error>> {
