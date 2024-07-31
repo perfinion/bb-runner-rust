@@ -1,11 +1,11 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
-use std::fs::File;
 use std::io::ErrorKind;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use tokio::time::{sleep, Duration};
+use tokio::fs::File;
+use tokio::io::BufReader;
+use tokio::io::AsyncWriteExt; // for write_all()
 use tonic::{transport::Server, Status};
 
 #[cfg(unix)]
@@ -67,34 +67,28 @@ impl Runner for RunnerService {
         println!("\ttemporary_directory = {:?}", run.temporary_directory);
         println!("\tserver_logs_directory = {:?}", run.server_logs_directory);
 
-        let mut stdout = String::new();
-        let mut stdout_file = workdir_file(&run, &run.stdout_path)?;
-        let mut stderr = String::new();
-        let mut stderr_file = workdir_file(&run, &run.stderr_path)?;
+        let mut stdout_buf: Vec<u8> = vec![];
+        let mut stdout_file = workdir_file(&run, &run.stdout_path).await?;
+        let mut stderr_buf: Vec<u8> = vec![];
+        let mut stderr_file = workdir_file(&run, &run.stderr_path).await?;
 
         let mut child = spawn_child(&run)?;
         println!("Started process: {}", child.id());
 
         let exit_status = wait_child(&mut child).await?;
 
-        match child.stdout {
-            Some(mut s) => { let _ = s.read_to_string(&mut stdout); },
-            None => {},
-        };
-
-        match child.stderr {
-            Some(mut s) => { let _ = s.read_to_string(&mut stderr); },
-            None => {},
-        };
+        copy_stdout(child.stdout, &mut stdout_buf).await?;
+        copy_stderr(child.stderr, &mut stderr_buf).await?;
 
         println!("Return: {:?}", exit_status.code());
         println!("==== Command stdout: ====");
-        println!("{}", stdout);
-        let _ = stdout_file.write_all(stdout.as_bytes());
+        println!("{}", String::from_utf8_lossy(&stdout_buf));
         println!("==== Command stderr: ====");
-        println!("{}", stderr);
-        let _ = stderr_file.write_all(stderr.as_bytes());
+        println!("{}", String::from_utf8_lossy(&stderr_buf));
         println!("==== End ====");
+
+        let _ = stdout_file.write_all(&stdout_buf).await?;
+        let _ = stderr_file.write_all(&stderr_buf).await?;
 
         let mut runresp = RunResponse::default();
         match exit_status.code() {
@@ -106,14 +100,14 @@ impl Runner for RunnerService {
     }
 }
 
-fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
+async fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
     let wdpath: PathBuf = [
         &run.input_root_directory,
         &run.working_directory,
         &wdname,
     ].iter().collect();
 
-    File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
+    File::create(wdpath).await.or(Err(Status::internal("Failed to create stdout")))
 }
 
 async fn wait_child(child: &mut std::process::Child) -> Result<std::process::ExitStatus, tonic::Status> {
@@ -129,6 +123,26 @@ async fn wait_child(child: &mut std::process::Child) -> Result<std::process::Exi
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
     Err(Status::internal("Wait failed"))
+}
+
+async fn copy_stdout(stdout: Option<std::process::ChildStdout>, buf: &mut Vec<u8>) -> Result<u64, tonic::Status> {
+    let stdout_tk: Option<tokio::process::ChildStdout> = stdout.map(|s|tokio::process::ChildStdout::from_std(s).ok()).unwrap_or(None);
+    let reader = stdout_tk.map(|s| BufReader::new(s));
+
+    match reader {
+        Some(mut b) => tokio::io::copy_buf(&mut b, buf).await.or(Err(Status::internal("Stdout copy failed"))),
+        None => Ok(0),
+    }
+}
+
+async fn copy_stderr(stderr: Option<std::process::ChildStderr>, buf: &mut Vec<u8>) -> Result<u64, tonic::Status> {
+    let stderr_tk: Option<tokio::process::ChildStderr> = stderr.map(|s|tokio::process::ChildStderr::from_std(s).ok()).unwrap_or(None);
+    let reader = stderr_tk.map(|s| BufReader::new(s));
+
+    match reader {
+        Some(mut b) => tokio::io::copy_buf(&mut b, buf).await.or(Err(Status::internal("Stderr copy failed"))),
+        None => Ok(0),
+    }
 }
 
 fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
