@@ -75,23 +75,33 @@ impl Runner for RunnerService {
         let mut child = spawn_child(&run)?;
         println!("Started process: {}", child.id());
 
-        let exit_status = wait_child(&mut child).await?;
+        let exit_status = wait_child(&mut child).await;
+        // let exit_future = wait_child(&mut child);
+        // let exit_status = exit_future.await;
 
-        copy_stdout(child.stdout, &mut stdout_buf).await?;
-        copy_stderr(child.stderr, &mut stderr_buf).await?;
+        let stdout_future = copy_stdout(child.stdout, &mut stdout_buf);
+        let stderr_future = copy_stderr(child.stderr, &mut stderr_buf);
+        let (stdout_size, stderr_size) = tokio::join!(stdout_future, stderr_future);
 
-        println!("Return: {:?}", exit_status.code());
-        println!("==== Command stdout: ====");
+        let exit_code = match exit_status {
+            Ok(e) => e.code(),
+            Err(_) => Some(255),
+        };
+        println!("Return: {:?}", exit_code);
+        println!("==== Command stdout: size {:?} ====", stdout_size);
         println!("{}", String::from_utf8_lossy(&stdout_buf));
-        println!("==== Command stderr: ====");
+        println!("==== Command stderr: size {:?} ====", stderr_size);
         println!("{}", String::from_utf8_lossy(&stderr_buf));
         println!("==== End ====");
 
-        let _ = stdout_file.write_all(&stdout_buf).await?;
-        let _ = stderr_file.write_all(&stderr_buf).await?;
+        // let _ = stdout_file.write_all(&stdout_buf).await?;
+        // let _ = stderr_file.write_all(&stderr_buf).await?;
+        let _ = tokio::join!(
+            stdout_file.write_all(&stdout_buf),
+            stderr_file.write_all(&stderr_buf));
 
         let mut runresp = RunResponse::default();
-        match exit_status.code() {
+        match exit_code {
             Some(code) => runresp.exit_code = code,
             None => return Err(Status::internal("No Exit Code")),
         }
@@ -111,8 +121,6 @@ async fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::
 }
 
 async fn wait_child(child: &mut std::process::Child) -> Result<std::process::ExitStatus, tonic::Status> {
-    drop(child.stdin.take());
-
     loop {
         match child.try_wait() {
             Ok(Some(e)) => return Ok(e),
@@ -169,7 +177,13 @@ fn spawn_child(run: &RunRequest) -> Result<std::process::Child, tonic::Status> {
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
-    command.spawn().or(Err(Status::internal("Failed to spawn child")))
+    match command.spawn() {
+        Ok(mut child) => {
+            drop(child.stdin.take());
+            Ok(child)
+        },
+        Err(_) => Err(Status::internal("Failed to spawn child")),
+    }
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Error>> {
