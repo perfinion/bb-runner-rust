@@ -15,6 +15,9 @@ prost = "0.12"
 prost-types = "0.12"
 tokio = { version = "1.0", features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
+unshare = "0.7"
+nix = "0.20.2"  # Unshare depends on a pretty old version of nix
+# nix = { version = "0.22.3", features = ["process"] }
 
 [build-dependencies]
 tonic-build = "0.11"

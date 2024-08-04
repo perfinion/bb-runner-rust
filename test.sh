@@ -27,6 +27,7 @@ echo Done!
 env
 sleep \${1:-2}
 ls -al
+[[ $dir == *2 ]] && kill \$\$
 exit 0
 EOF
 
