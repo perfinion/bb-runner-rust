@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use unshare::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use tonic::{transport::Server, Status};
 use nix::sys::wait::WaitPidFlag;
 
@@ -107,29 +107,27 @@ fn try_waitpid(pid: nix::unistd::Pid) -> Result<Option<ExitStatus>, std::io::Err
     let waitflags = WaitPidFlag::WNOHANG;
 
     match nix::sys::wait::waitpid(Some(pid), Some(waitflags)) {
+        // Ok(Exited(x, status)) => {
+        //     assert!(x == pid);
+        //     return Ok(Some(ExitStatus::Exited(status as i8)));
+        // },
+        // Ok(Signaled(x, sig, core)) => {
+        //     assert!(x == pid);
+        //     println!("wait {} sig {} core {}", x, sig as i32, core);
+        //     return Ok(Some(ExitStatus::Signaled(sig, core)));
+        // },
+        Ok(Continued(_)) => Ok(None),
+        Ok(Stopped(_, _)) => Ok(None),
         Ok(PtraceSyscall(..)) => return Ok(None),
-        Ok(Exited(x, status)) => {
-            assert!(x == pid);
-            return Ok(Some(ExitStatus::Exited(status as i8)));
-        },
-        Ok(Signaled(x, sig, core)) => {
-            assert!(x == pid);
-            println!("wait {} sig {} core {}", x, sig as i32, core);
-            return Ok(Some(ExitStatus::Signaled(sig, core)));
-        },
-        Ok(Stopped(_, _)) => unreachable!(),
-        Ok(Continued(_)) => unreachable!(),
         Ok(StillAlive) => return Ok(None),
         Ok(_) => return Ok(None),  // What else is there to match?
-        Err(nix::Error::Sys(nix::errno::Errno::EINTR)) => return Ok(None),
-        Err(nix::Error::InvalidPath) => unreachable!(),
-        Err(nix::Error::InvalidUtf8) => unreachable!(),
-        Err(nix::Error::UnsupportedOperation) => {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other,
-                "nix error: unsupported operation"));
-        },
-        Err(nix::Error::Sys(x)) => {
-            return Err(std::io::Error::from_raw_os_error(x as i32));
+        Err(nix::Error::EINTR) => return Ok(None),
+        // Err(nix::Error::UnsupportedOperation) => {
+        //     return Err(std::io::Error::new(std::io::ErrorKind::Other,
+        //         "nix error: unsupported operation"));
+        // },
+        Err(e) => {
+            return Err(std::io::Error::from(e));
         },
     }
 }
@@ -138,8 +136,7 @@ async fn wait_child(child: &mut Child) -> Result<ExitStatus, tonic::Status> {
     loop {
         println!("w{} ", child.id());
 
-        let pid = nix::unistd::Pid::from_raw(child.pid());
-        match try_waitpid(pid) {
+        match child.try_wait() {
             Ok(None) => {},
             Ok(Some(e)) => {
                 println!("w{} exited {}", child.id(), e);
@@ -151,6 +148,20 @@ async fn wait_child(child: &mut Child) -> Result<ExitStatus, tonic::Status> {
             },
             // Err(_) => break,
         }
+
+        // let pid = nix::unistd::Pid::from_raw(child.pid());
+        // match try_waitpid(pid) {
+        //     Ok(None) => {},
+        //     Ok(Some(e)) => {
+        //         println!("w{} exited {}", child.id(), e);
+        //         return Ok(e);
+        //     },
+        //     Err(e) => {
+        //         println!("w{} err {}", child.id(), e);
+        //         break;
+        //     },
+        //     // Err(_) => break,
+        // }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
@@ -182,8 +193,8 @@ fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.env_clear();
     command.envs(&run.environment_variables);
     command.stdin(Stdio::null());
-    command.stdout(Stdio::from_file(stdout_file));
-    command.stderr(Stdio::from_file(stderr_file));
+    command.stdout(stdout_file);
+    command.stderr(stderr_file);
 
     match command.spawn() {
         Ok(mut child) => {
