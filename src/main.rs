@@ -22,6 +22,7 @@ pub mod buildbarn_runner {
 mod local_runner;
 use local_runner::{spawn_child, wait_child};
 
+pub mod child;
 
 #[derive(Debug)]
 struct RunnerService;
