@@ -1,12 +1,13 @@
 use std::fs::File;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, Stdio};
 use tonic::Status;
-use nix::sys::wait::WaitPidFlag;
+use tokio::signal::unix::{signal, SignalKind};
 
 use crate::buildbarn_runner::RunRequest;
 use crate::child::{ResUse, Wait4};
 
+const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
     let wdpath: PathBuf = [
@@ -18,44 +19,35 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status
     File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
 }
 
-fn try_waitpid(pid: nix::unistd::Pid) -> Result<Option<ExitStatus>, std::io::Error> {
-    // Returns Err() if a non-recoverable failure
-    // Ok(None) if child is still alive, try again later
-    // Ok(Some(ExitStatus)) if child has exited (normally or by signal)
-
-    use nix::sys::wait::WaitStatus::*;
-    let waitflags = WaitPidFlag::WNOHANG;
-
-    match nix::sys::wait::waitpid(Some(pid), Some(waitflags)) {
-        // Ok(Exited(x, status)) => {
-        //     assert!(x == pid);
-        //     return Ok(Some(ExitStatus::Exited(status as i8)));
-        // },
-        // Ok(Signaled(x, sig, core)) => {
-        //     assert!(x == pid);
-        //     println!("wait {} sig {} core {}", x, sig as i32, core);
-        //     return Ok(Some(ExitStatus::Signaled(sig, core)));
-        // },
-        Ok(Continued(_)) => Ok(None),
-        Ok(Stopped(_, _)) => Ok(None),
-        Ok(PtraceSyscall(..)) => return Ok(None),
-        Ok(StillAlive) => return Ok(None),
-        Ok(_) => return Ok(None),  // What else is there to match?
-        Err(nix::Error::EINTR) => return Ok(None),
-        // Err(nix::Error::UnsupportedOperation) => {
-        //     return Err(std::io::Error::new(std::io::ErrorKind::Other,
-        //         "nix error: unsupported operation"));
-        // },
-        Err(e) => {
-            return Err(std::io::Error::from(e));
-        },
-    }
-}
-
+/// SIGCHILD signal handlers are global for the whole process, you can't register a handler
+/// specifically for one child only.
+/// Additionally, the kernel can coalese signals. If two children exit, the kernel is allowed to
+/// send only one single SIGCHILD.
+/// Epoll on a PidFd would probably be more reliable, try that later.
+///
+/// buildbarn runner is just responsible for spawning children, It does not _do_ anything that
+/// interesting, the children do all the intensive work, so a few extra syscalls every few
+/// seconds are basically irrelevant.
+///
+/// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
+/// eventually reap the child.
 pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
-    loop {
-        println!("w{}", child.id());
+    let mut sig = signal(SignalKind::child())?;
+    let mut interval = tokio::time::interval(WAIT_INTERVAL);
 
+    loop {
+        // The first tick() always finishes immediately, so we can try the child right away in case
+        // it has already finished.
+        tokio::select! {
+            _ = sig.recv() => {
+                println!("Received SIGCHILD");
+            }
+            _ = interval.tick() => {
+                println!("Sleep Finished");
+            }
+        };
+
+        println!("w{}", child.id());
         match child.try_wait4() {
             Ok(None) => {},
             Ok(Some(e)) => return Ok(e),
@@ -64,8 +56,6 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
                 break;
             },
         }
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 
     Err(Status::internal("Wait failed"))
