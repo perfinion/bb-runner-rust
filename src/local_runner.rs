@@ -5,6 +5,7 @@ use tonic::Status;
 use nix::sys::wait::WaitPidFlag;
 
 use crate::buildbarn_runner::RunRequest;
+use crate::child::{ResUse, Wait4};
 
 
 fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
@@ -51,36 +52,18 @@ fn try_waitpid(pid: nix::unistd::Pid) -> Result<Option<ExitStatus>, std::io::Err
     }
 }
 
-pub async fn wait_child(child: &mut Child) -> Result<ExitStatus, tonic::Status> {
+pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
     loop {
-        println!("w{} ", child.id());
+        println!("w{}", child.id());
 
-        match child.try_wait() {
+        match child.try_wait4() {
             Ok(None) => {},
-            Ok(Some(e)) => {
-                println!("w{} exited {}", child.id(), e);
-                return Ok(e);
-            },
+            Ok(Some(e)) => return Ok(e),
             Err(e) => {
                 println!("w{} err {}", child.id(), e);
                 break;
             },
-            // Err(_) => break,
         }
-
-        // let pid = nix::unistd::Pid::from_raw(child.pid());
-        // match try_waitpid(pid) {
-        //     Ok(None) => {},
-        //     Ok(Some(e)) => {
-        //         println!("w{} exited {}", child.id(), e);
-        //         return Ok(e);
-        //     },
-        //     Err(e) => {
-        //         println!("w{} err {}", child.id(), e);
-        //         break;
-        //     },
-        //     // Err(_) => break,
-        // }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }

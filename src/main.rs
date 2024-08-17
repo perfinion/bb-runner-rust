@@ -57,27 +57,20 @@ impl Runner for RunnerService {
         let run = request.get_ref();
 
         println!("=== Run ===");
-        println!("\t{:?}", conn_info);
-        println!("\targuments = {:?}", run.arguments);
-        println!("\tenvironment_variables = {:?}", run.environment_variables);
-        println!("\tworking_directory = {:?}", run.working_directory);
-        println!("\tstdout_path = {:?}", run.stdout_path);
-        println!("\tstderr_path = {:?}", run.stderr_path);
-        println!("\tinput_root_directory = {:?}", run.input_root_directory);
-        println!("\ttemporary_directory = {:?}", run.temporary_directory);
-        println!("\tserver_logs_directory = {:?}", run.server_logs_directory);
+        println!("Connection Info = {:#?}", conn_info);
+        println!("Run Request = {:#?}", run);
 
         let mut child = spawn_child(&run)?;
         let pid = child.id();
         println!("Started process: {}", pid);
 
-        let exit_status = wait_child(&mut child).await;
+        let exit_resuse = wait_child(&mut child).await;
+        println!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
-        let exit_code = match exit_status {
-            Ok(e) => e.code(),
+        let exit_code = match exit_resuse {
+            Ok(e) => e.status.code(),
             Err(_) => Some(255),
         };
-        println!("\nChild {} exit = {:?}", pid, exit_code);
 
         let mut runresp = RunResponse::default();
         match exit_code {
