@@ -38,13 +38,29 @@ EOF
 create_test_files test_base1
 create_test_files test_base2
 
+run_grpcurl() {
+    grpcurl \
+        -import-path proto/resourceusage/ \
+        -import-path proto/runner/ \
+        -proto runner.proto \
+        -proto resourceusage.proto \
+        -plaintext \
+        $@
+}
 
 send_run() {
     dir="$1"
     time="$(( $RANDOM % 3 + ${2:-1} ))"
 
+    # proto/resourceusage/resourceusage.proto
+    # proto/runner/runner.proto
+    # proto/configuration/bb_runner/bb_runner.proto
+
     echo -e "\nRunning ${dir} with timeout=${time} and input data:"
-    time grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/Run <<EOM
+    run_grpcurl \
+        -d @ \
+        -unix /tmp/tonic/helloworld \
+        buildbarn.runner.Runner/Run <<EOM
 {
   "arguments": [
     "run.sh",
@@ -88,14 +104,14 @@ grep -H . test_base2/stderr.txt
 exit
 
 echo -e "\nCheckReadiness with no path:"
-grpcurl -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/CheckReadiness
+run_grpcurl -unix /tmp/tonic/helloworld buildbarn.runner.Runner/CheckReadiness
 
 echo -e "\nCheckReadiness with existing path:"
-grpcurl -d @ -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/CheckReadiness <<EOM
+run_grpcurl -d @ -unix /tmp/tonic/helloworld buildbarn.runner.Runner/CheckReadiness <<EOM
 {
   "path": "build.rs"
 }
 EOM
 
 echo -e "\nRun no data:"
-grpcurl -proto proto/runner/runner.proto -plaintext -unix /tmp/tonic/helloworld buildbarn.runner.Runner/Run
+run_grpcurl -unix /tmp/tonic/helloworld buildbarn.runner.Runner/Run

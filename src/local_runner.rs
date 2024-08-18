@@ -4,7 +4,7 @@ use std::process::{Child, Command, Stdio};
 use tonic::Status;
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::buildbarn_runner::RunRequest;
+use crate::proto::runner::RunRequest;
 use crate::child::{ResUse, Wait4};
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);

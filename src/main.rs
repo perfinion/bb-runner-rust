@@ -11,12 +11,18 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tonic::transport::server::UdsConnectInfo;
 
-use buildbarn_runner::runner_server::{Runner, RunnerServer};
-use buildbarn_runner::{CheckReadinessRequest, RunRequest, RunResponse};
+use proto::resourceusage::PosixResourceUsage;
+use proto::runner::runner_server::{Runner, RunnerServer};
+use proto::runner::{CheckReadinessRequest, RunRequest, RunResponse};
+use prost_types::Any as PbAny;
 
-
-pub mod buildbarn_runner {
-    tonic::include_proto!("buildbarn.runner");
+pub mod proto {
+    pub mod resourceusage {
+        tonic::include_proto!("buildbarn.resourceusage");
+    }
+    pub mod runner {
+        tonic::include_proto!("buildbarn.runner");
+    }
 }
 
 mod local_runner;
@@ -68,7 +74,7 @@ impl Runner for RunnerService {
         println!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
         let exit_code = match exit_resuse {
-            Ok(e) => e.status.code(),
+            Ok(ref e) => e.status.code(),
             Err(_) => Some(255),
         };
 
@@ -76,6 +82,24 @@ impl Runner for RunnerService {
         match exit_code {
             Some(code) => runresp.exit_code = code,
             None => return Err(Status::internal("No Exit Code")),
+        }
+        if let Ok(e) = exit_resuse {
+            let mut pbres = PosixResourceUsage::default();
+            if let Ok(n) = prost_types::Duration::try_from(e.rusage.utime) {
+                pbres.user_time = Some(n);
+            }
+
+            if let Ok(n) = prost_types::Duration::try_from(e.rusage.stime) {
+                pbres.system_time = Some(n);
+            }
+
+            if let Ok(n) = i64::try_from(e.rusage.maxrss) {
+                pbres.maximum_resident_set_size = n;
+            }
+
+            if let Ok(r) = PbAny::from_msg::<PosixResourceUsage>(&pbres) {
+                runresp.resource_usage = vec![r];
+            };
         }
 
         Ok(tonic::Response::new(runresp))
