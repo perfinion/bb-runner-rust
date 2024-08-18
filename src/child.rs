@@ -3,8 +3,16 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, ExitStatus};
 use std::time::Duration;
 
+use crate::proto::resourceusage::PosixResourceUsage;
+
 use nix::libc::timeval;
 use nix::libc::{self, pid_t};
+
+const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+    1
+} else {
+    1024
+};
 
 /// Resources used by a process
 #[derive(Debug)]
@@ -21,6 +29,25 @@ pub struct ResourceUsage {
     ///
     /// Zero if not available on the platform.
     pub maxrss: u64,
+}
+
+impl Into<PosixResourceUsage> for ResourceUsage {
+    fn into(self) -> PosixResourceUsage {
+        let mut pbres = PosixResourceUsage::default();
+        if let Ok(n) = prost_types::Duration::try_from(self.utime) {
+            pbres.user_time = Some(n);
+        }
+
+        if let Ok(n) = prost_types::Duration::try_from(self.stime) {
+            pbres.system_time = Some(n);
+        }
+
+        if let Ok(n) = i64::try_from(self.maxrss) {
+            pbres.maximum_resident_set_size = n;
+        }
+
+        pbres
+    }
 }
 
 /// Resources used by a process and its exit status
@@ -67,18 +94,12 @@ fn wait4(pid: pid_t, options: i32) -> Result<Option<ResUse>> {
     } else {
         let rusage = unsafe { rusage.assume_init() };
 
-        let maxrss = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
-            rusage.ru_maxrss
-        } else {
-            rusage.ru_maxrss * 1024
-        };
-
         Ok(Some(ResUse {
             status: ExitStatus::from_raw(status),
             rusage: ResourceUsage {
                 utime: timeval_to_duration(rusage.ru_utime),
                 stime: timeval_to_duration(rusage.ru_stime),
-                maxrss: maxrss as u64,
+                maxrss: (rusage.ru_maxrss as u64) * RSS_MULTIPLIER,
             },
         }))
     }

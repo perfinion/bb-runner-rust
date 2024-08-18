@@ -84,19 +84,7 @@ impl Runner for RunnerService {
             None => return Err(Status::internal("No Exit Code")),
         }
         if let Ok(e) = exit_resuse {
-            let mut pbres = PosixResourceUsage::default();
-            if let Ok(n) = prost_types::Duration::try_from(e.rusage.utime) {
-                pbres.user_time = Some(n);
-            }
-
-            if let Ok(n) = prost_types::Duration::try_from(e.rusage.stime) {
-                pbres.system_time = Some(n);
-            }
-
-            if let Ok(n) = i64::try_from(e.rusage.maxrss) {
-                pbres.maximum_resident_set_size = n;
-            }
-
+            let pbres = e.rusage.into();
             if let Ok(r) = PbAny::from_msg::<PosixResourceUsage>(&pbres) {
                 runresp.resource_usage = vec![r];
             };
