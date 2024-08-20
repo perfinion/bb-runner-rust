@@ -11,10 +11,10 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tonic::transport::server::UdsConnectInfo;
 
+use prost_types::Any as PbAny;
 use proto::resourceusage::PosixResourceUsage;
 use proto::runner::runner_server::{Runner, RunnerServer};
 use proto::runner::{CheckReadinessRequest, RunRequest, RunResponse};
-use prost_types::Any as PbAny;
 
 pub mod proto {
     pub mod resourceusage {
@@ -33,14 +33,12 @@ pub mod child;
 #[derive(Debug)]
 struct RunnerService;
 
-
 #[tonic::async_trait]
 impl Runner for RunnerService {
     async fn check_readiness(
         &self,
         request: tonic::Request<CheckReadinessRequest>,
     ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-
         let readyreq = request.get_ref();
 
         println!("CheckReadiness = {:?}", request);

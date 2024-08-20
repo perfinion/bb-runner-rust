@@ -1,20 +1,18 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use tonic::Status;
 use tokio::signal::unix::{signal, SignalKind};
+use tonic::Status;
 
-use crate::proto::runner::RunRequest;
 use crate::child::{ResUse, Wait4};
+use crate::proto::runner::RunRequest;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
-    let wdpath: PathBuf = [
-        &run.input_root_directory,
-        &run.working_directory,
-        &wdname,
-    ].iter().collect();
+    let wdpath: PathBuf = [&run.input_root_directory, &run.working_directory, &wdname]
+        .iter()
+        .collect();
 
     File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
 }
@@ -49,12 +47,12 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
 
         println!("w{}", child.id());
         match child.try_wait4() {
-            Ok(None) => {},
+            Ok(None) => {}
             Ok(Some(e)) => return Ok(e),
             Err(e) => {
                 println!("w{} err {}", child.id(), e);
                 break;
-            },
+            }
         }
     }
 
@@ -62,17 +60,17 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
 }
 
 pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
-
-    let cwd: PathBuf = [
-        &run.input_root_directory,
-        &run.working_directory,
-    ].iter().collect();
+    let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
+        .iter()
+        .collect();
 
     let arg0: PathBuf = [
         &run.input_root_directory,
         &run.working_directory,
         &run.arguments[0],
-    ].iter().collect();
+    ]
+    .iter()
+    .collect();
 
     println!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
 
@@ -92,8 +90,7 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
         Ok(mut child) => {
             drop(child.stdin.take());
             Ok(child)
-        },
+        }
         Err(_) => Err(Status::internal("Failed to spawn child")),
     }
 }
-
