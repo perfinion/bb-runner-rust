@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use tokio::signal::unix::{signal, SignalKind};
 use tonic::Status;
+use tracing::{self, debug, error, info, warn};
 
 use crate::child::{ResUse, Wait4};
 use crate::proto::runner::RunRequest;
@@ -29,6 +30,7 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status
 ///
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
+#[tracing::instrument]
 pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
@@ -38,27 +40,29 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
         // it has already finished.
         tokio::select! {
             _ = sig.recv() => {
-                println!("Received SIGCHILD");
+                debug!("Received SIGCHILD");
             }
             _ = interval.tick() => {
-                println!("Sleep Finished");
+                debug!("Sleep Finished");
             }
         };
 
-        println!("w{}", child.id());
+        info!(pid = child.id(), "waiting");
         match child.try_wait4() {
             Ok(None) => {}
             Ok(Some(e)) => return Ok(e),
             Err(e) => {
-                println!("w{} err {}", child.id(), e);
+                error!(pid = child.id(), "wait error {}", e);
                 break;
             }
         }
     }
 
+    error!(pid = child.id(), "Failed to wait for child {}", child.id());
     Err(Status::internal("Wait failed"))
 }
 
+#[tracing::instrument]
 pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
         .iter()
@@ -72,7 +76,7 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     .iter()
     .collect();
 
-    println!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
+    warn!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
 
     let stdout_file = workdir_file(&run, &run.stdout_path)?;
     let stderr_file = workdir_file(&run, &run.stderr_path)?;

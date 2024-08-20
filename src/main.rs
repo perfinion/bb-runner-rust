@@ -3,6 +3,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use tonic::{transport::Server, Status};
+use tracing::{self, debug, info, warn};
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -35,24 +36,26 @@ struct RunnerService;
 
 #[tonic::async_trait]
 impl Runner for RunnerService {
+    #[tracing::instrument]
     async fn check_readiness(
         &self,
         request: tonic::Request<CheckReadinessRequest>,
     ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
         let readyreq = request.get_ref();
 
-        println!("CheckReadiness = {:?}", request);
+        debug!("CheckReadiness = {:?}", request);
 
         if Path::new(&readyreq.path).exists() {
-            println!("CheckReadiness.path exists = {:?}", readyreq.path);
+            info!("CheckReadiness.path exists = {:?}", readyreq.path);
             return Ok(tonic::Response::new(()));
         }
 
-        println!("CheckReadiness.path not found = {:?}", readyreq.path);
+        info!("CheckReadiness.path not found = {:?}", readyreq.path);
         Err(Status::internal("not ready"))
     }
 
     #[cfg(unix)]
+    #[tracing::instrument]
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,
@@ -60,16 +63,15 @@ impl Runner for RunnerService {
         let conn_info = request.extensions().get::<UdsConnectInfo>().unwrap();
         let run = request.get_ref();
 
-        println!("=== Run ===");
-        println!("Connection Info = {:#?}", conn_info);
-        println!("Run Request = {:#?}", run);
+        info!("Run Request = {:#?}", run);
+        debug!("Run Connection Info = {:#?}", conn_info);
 
         let mut child = spawn_child(&run)?;
         let pid = child.id();
-        println!("Started process: {}", pid);
+        debug!("Started process: {}", pid);
 
         let exit_resuse = wait_child(&mut child).await;
-        println!("\nChild {} exit = {:#?}", pid, exit_resuse);
+        info!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
         let exit_code = match exit_resuse {
             Ok(ref e) => e.status.code(),
@@ -107,7 +109,13 @@ fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Er
 #[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Hello, world from bb_runner!");
+    use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+
+    // if RUST_LOG var is not set, default to debug
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::DEBUG.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let path = Path::new("/tmp/tonic/helloworld");
     let socket_stream: UnixListenerStream = bind_socket(path).unwrap_or_else(|error| {
@@ -117,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bb_runner = RunnerService {};
     let svc = RunnerServer::new(bb_runner);
 
-    println!("Starting Runner ...");
+    warn!("Starting Buildbarn Runner ...");
     Server::builder()
         .add_service(svc)
         .serve_with_incoming(socket_stream)
