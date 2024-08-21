@@ -1,4 +1,6 @@
+use nix::sched::{unshare, CloneFlags};
 use std::fs::File;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use tokio::signal::unix::{signal, SignalKind};
@@ -90,6 +92,10 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.stdout(stdout_file);
     command.stderr(stderr_file);
 
+    unsafe {
+        command.pre_exec(unshare_pre_exec);
+    }
+
     match command.spawn() {
         Ok(mut child) => {
             drop(child.stdin.take());
@@ -97,4 +103,8 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
         }
         Err(_) => Err(Status::internal("Failed to spawn child")),
     }
+}
+
+fn unshare_pre_exec() -> std::io::Result<()> {
+    Ok(unshare(CloneFlags::CLONE_NEWNS)?)
 }

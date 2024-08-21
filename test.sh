@@ -23,10 +23,9 @@ echo "PWD: [\${PWD}]"
 pwd
 echo "Args: [\$@]"
 
-echo Done!
 env
 sleep \${1:-2}
-ls -al
+ls -al /proc/\$\$/ns/* >&2
 [[ $dir == *2 ]] && kill \$\$
 exit 0
 EOF
