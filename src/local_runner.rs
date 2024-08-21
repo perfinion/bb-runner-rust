@@ -106,5 +106,15 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
 }
 
 fn unshare_pre_exec() -> std::io::Result<()> {
-    Ok(unshare(CloneFlags::CLONE_NEWNS)?)
+    // CLONE_NEWUSER requires that the calling process is not threaded
+    let clone_flags = CloneFlags::CLONE_NEWCGROUP
+        | CloneFlags::CLONE_NEWIPC
+        | CloneFlags::CLONE_NEWNET
+        | CloneFlags::CLONE_NEWNS
+        | CloneFlags::CLONE_NEWUSER
+        | CloneFlags::CLONE_NEWUTS;
+    // Doesnt work yet
+    // | CloneFlags::CLONE_NEWPID
+
+    Ok(unshare(clone_flags)?)
 }

@@ -1,8 +1,6 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
-use std::fs::Permissions;
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tonic::{transport::Server, Status};
 use tracing::{self, debug, info, warn};
@@ -105,13 +103,12 @@ fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Er
     });
 
     let socket = UnixListener::bind(path)?;
-    // TODO: Make stricter socket perms, makes testing easier for now
-    let _ = std::fs::set_permissions(path, Permissions::from_mode(0o777));
     Ok(UnixListenerStream::new(socket))
 }
 
 #[cfg(unix)]
-#[tokio::main]
+// CLONE_NEWUSER requires that the calling process is not threaded
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
