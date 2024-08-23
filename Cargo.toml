@@ -15,7 +15,7 @@ prost = "0.12"
 prost-types = "0.12"
 tokio = { version = "1.0", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-nix = { version = "0.29.0", features = ["process", "sched"] }
+nix = { version = "0.29.0", features = ["hostname", "process", "sched"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 

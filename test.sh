@@ -22,6 +22,7 @@ echo Test Child stderr >&2
 echo "PWD: [\${PWD}]"
 pwd
 echo "Args: [\$@]"
+echo "Hostname: $(hostname)"
 
 env
 sleep \${1:-2}
