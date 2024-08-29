@@ -2,12 +2,12 @@ use nix::sched::{unshare, CloneFlags};
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
 use tonic::Status;
 use tracing::{self, debug, error, info, warn};
 
-use crate::child::{ResUse, Wait4};
+use crate::child::{Child, Command, ResUse, Wait4};
 use crate::proto::runner::RunRequest;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -83,7 +83,7 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     let stdout_file = workdir_file(&run, &run.stdout_path)?;
     let stderr_file = workdir_file(&run, &run.stderr_path)?;
 
-    let mut command = Command::new(&arg0);
+    let mut command = std::process::Command::new(&arg0);
     command.args(&run.arguments[1..]);
     command.current_dir(&cwd);
     command.env_clear();
@@ -96,13 +96,9 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
         command.pre_exec(unshare_pre_exec);
     }
 
-    match command.spawn() {
-        Ok(mut child) => {
-            drop(child.stdin.take());
-            Ok(child)
-        }
-        Err(_) => Err(Status::internal("Failed to spawn child")),
-    }
+    Command::from(command)
+        .spawn()
+        .map_err(|_| Status::internal("Failed to spawn child"))
 }
 
 fn unshare_pre_exec() -> std::io::Result<()> {

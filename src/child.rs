@@ -1,6 +1,8 @@
+use nix::sched::{unshare, CloneFlags};
 use std::io::{Error, Result};
+use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Child, ExitStatus};
+use std::process::{self, ExitStatus};
 use std::time::Duration;
 
 use crate::proto::resourceusage::PosixResourceUsage;
@@ -73,6 +75,44 @@ pub trait Wait4 {
     ///
     /// [`try_wait`]: std::process::Child::try_wait
     fn try_wait4(&mut self) -> Result<Option<ResUse>>;
+}
+
+#[derive(Debug)]
+pub struct Command {
+    inner: process::Command,
+    namespaces: CloneFlags,
+}
+
+impl std::convert::From<process::Command> for Command {
+    fn from(source: process::Command) -> Self {
+        Self {
+            inner: source,
+            namespaces: CloneFlags::empty(),
+        }
+    }
+}
+
+impl Command {
+    pub fn spawn(&mut self) -> Result<Child> {
+        self.inner.spawn().map(|mut inner| {
+            drop(inner.stdin.take());
+            let pid = inner.id();
+
+            Child { inner, pid }
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Child {
+    inner: process::Child,
+    pid: u32,
+}
+
+impl Child {
+    pub fn id(&self) -> u32 {
+        self.pid
+    }
 }
 
 #[allow(clippy::useless_conversion)]
