@@ -1,14 +1,18 @@
-use nix::sched::{unshare, CloneFlags};
 use std::io::{Error, Result};
-use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, ExitStatus};
+use std::thread::sleep;
 use std::time::Duration;
 
-use crate::proto::resourceusage::PosixResourceUsage;
+use tracing::info;
 
-use nix::libc::timeval;
-use nix::libc::{self, pid_t};
+use nix::libc::{self, pid_t, timeval};
+use nix::sched::{self, CloneFlags};
+use nix::sys::prctl;
+use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
+use nix::unistd::{self, Pid};
+
+use crate::proto::resourceusage::PosixResourceUsage;
 
 const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
     1
@@ -94,24 +98,68 @@ impl std::convert::From<process::Command> for Command {
 
 impl Command {
     pub fn spawn(&mut self) -> Result<Child> {
-        self.inner.spawn().map(|mut inner| {
-            drop(inner.stdin.take());
-            let pid = inner.id();
-
-            Child { inner, pid }
-        })
+        clone_pid1().map(|pid| Child { pid })
     }
+}
+
+/// Resets all signal handlers and masks so nothing is inherited from parents
+/// Also sets parent death signal to SIGKILL
+fn reset_signals() -> () {
+    prctl::set_pdeathsig(Signal::SIGKILL).expect("pdeathsig");
+
+    signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
+        .expect("unblocking signals");
+
+    let sa = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+    for s in Signal::iterator() {
+        match s {
+            // SIGKILL and SIGSTOP are not handleable
+            Signal::SIGKILL | Signal::SIGSTOP => {}
+            // Dont care what they previously were
+            s => unsafe {
+                let _ = signal::sigaction(s, &sa);
+            },
+        }
+    }
+}
+
+fn child_pid1() -> isize {
+    let pid = unistd::Pid::this();
+    nix::unistd::setpgid(pid, pid).expect("setpgid failed");
+    reset_signals();
+
+    for i in 0..10 {
+        let pid = unistd::getpid();
+        info!("From child!! {} pid = {}", i, pid);
+        sleep(Duration::from_millis(1000));
+    }
+    0
+}
+
+fn clone_pid1() -> Result<Pid> {
+    const STACK_SIZE: usize = 1024 * 1024;
+    let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
+
+    let sig = Some(Signal::SIGCHLD as i32);
+    let clone_flags = CloneFlags::CLONE_NEWUSER
+        | CloneFlags::CLONE_NEWUTS
+        | CloneFlags::CLONE_NEWPID
+        | CloneFlags::CLONE_NEWNS;
+
+    let child_pid =
+        unsafe { sched::clone(Box::new(move || child_pid1()), stack, clone_flags, sig) };
+
+    Ok(child_pid?)
 }
 
 #[derive(Debug)]
 pub struct Child {
-    inner: process::Child,
-    pid: u32,
+    pid: Pid,
 }
 
 impl Child {
     pub fn id(&self) -> u32 {
-        self.pid
+        pid_t::from(self.pid) as u32
     }
 }
 
