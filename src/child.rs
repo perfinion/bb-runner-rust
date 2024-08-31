@@ -1,4 +1,5 @@
 use std::io::{Error, Result};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, ExitStatus};
 use std::thread::sleep;
@@ -6,10 +7,12 @@ use std::time::Duration;
 
 use tracing::info;
 
+use nix::fcntl::OFlag;
 use nix::libc::{self, pid_t, timeval};
 use nix::sched::{self, CloneFlags};
 use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
+use nix::mount::{self, MsFlags};
 use nix::unistd::{self, Pid};
 
 use crate::proto::resourceusage::PosixResourceUsage;
@@ -98,7 +101,14 @@ impl std::convert::From<process::Command> for Command {
 
 impl Command {
     pub fn spawn(&mut self) -> Result<Child> {
-        clone_pid1().map(|pid| Child { pid })
+        let (read_pipe, write_pipe) = unistd::pipe2(OFlag::O_CLOEXEC).expect("create pipe failed");
+        let ret = clone_pid1(read_pipe).map(|pid| Child { pid });
+
+        sleep(Duration::from_secs(10));
+
+        unistd::write(write_pipe, "A".as_bytes()).expect("start child");
+
+        ret
     }
 }
 
@@ -123,31 +133,59 @@ fn reset_signals() -> () {
     }
 }
 
-fn child_pid1() -> isize {
+fn child_pid1(read_pipe: BorrowedFd) -> isize {
     let pid = unistd::Pid::this();
     nix::unistd::setpgid(pid, pid).expect("setpgid failed");
     reset_signals();
 
+    let mut buf = [0; 8];
+    let _ = unistd::read(read_pipe.as_raw_fd(), &mut buf);
+    info!("Read from pipe: {:?}", buf);
+
+    // cd / before mounting in case we were keeping something busy
+    unistd::chdir("/").expect("cd / failed");
+    unistd::sethostname("sandbox").expect("sethostname failed");
+
+    let mount_flags = MsFlags::MS_NOSUID|MsFlags::MS_NOEXEC|MsFlags::MS_NODEV;
+    mount::mount(
+        Some("proc"),
+        "/proc",
+        Some("proc"),
+        mount_flags,
+        None::<&'static str>,
+    ).expect("mount proc failed");
+
     for i in 0..10 {
         let pid = unistd::getpid();
-        info!("From child!! {} pid = {}", i, pid);
+        let uid = unistd::getuid();
+        info!("From child!! {} pid = {} uid = {}", i, pid, uid);
         sleep(Duration::from_millis(1000));
     }
+
     0
 }
 
-fn clone_pid1() -> Result<Pid> {
+fn clone_pid1(read_pipe: OwnedFd) -> Result<Pid> {
     const STACK_SIZE: usize = 1024 * 1024;
     let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
 
     let sig = Some(Signal::SIGCHLD as i32);
-    let clone_flags = CloneFlags::CLONE_NEWUSER
-        | CloneFlags::CLONE_NEWUTS
+    let clone_flags = CloneFlags::CLONE_NEWCGROUP
         | CloneFlags::CLONE_NEWPID
-        | CloneFlags::CLONE_NEWNS;
+        | CloneFlags::CLONE_NEWIPC
+        | CloneFlags::CLONE_NEWNET
+        | CloneFlags::CLONE_NEWNS
+        | CloneFlags::CLONE_NEWUSER
+        | CloneFlags::CLONE_NEWUTS;
 
-    let child_pid =
-        unsafe { sched::clone(Box::new(move || child_pid1()), stack, clone_flags, sig) };
+    let child_pid = unsafe {
+        sched::clone(
+            Box::new(move || child_pid1(read_pipe.as_fd())),
+            stack,
+            clone_flags,
+            sig,
+        )
+    };
 
     Ok(child_pid?)
 }

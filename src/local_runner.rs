@@ -1,6 +1,4 @@
-use nix::sched::{unshare, CloneFlags};
 use std::fs::File;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
@@ -92,31 +90,7 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.stdout(stdout_file);
     command.stderr(stderr_file);
 
-    unsafe {
-        command.pre_exec(unshare_pre_exec);
-    }
-
     Command::from(command)
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
-}
-
-fn unshare_pre_exec() -> std::io::Result<()> {
-    nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGTERM)?;
-
-    // CLONE_NEWUSER requires that the calling process is not threaded
-    let clone_flags = CloneFlags::CLONE_NEWCGROUP
-        | CloneFlags::CLONE_NEWIPC
-        | CloneFlags::CLONE_NEWNET
-        | CloneFlags::CLONE_NEWNS
-        | CloneFlags::CLONE_NEWUSER
-        | CloneFlags::CLONE_NEWUTS;
-    // Doesnt work yet
-    // | CloneFlags::CLONE_NEWPID
-
-    let _ = unshare(clone_flags)?;
-
-    nix::unistd::sethostname("sandbox")?;
-
-    Ok(())
 }
