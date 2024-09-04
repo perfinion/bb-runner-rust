@@ -55,7 +55,7 @@ impl Runner for RunnerService {
     }
 
     #[cfg(unix)]
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,

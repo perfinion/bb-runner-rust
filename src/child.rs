@@ -102,7 +102,7 @@ impl std::convert::From<process::Command> for Command {
 impl Command {
     pub fn spawn(&mut self) -> Result<Child> {
         let (read_pipe, write_pipe) = unistd::pipe2(OFlag::O_CLOEXEC).expect("create pipe failed");
-        let ret = clone_pid1(read_pipe).map(|pid| Child { pid });
+        let ret = clone_pid1(&mut self.inner, read_pipe).map(|pid| Child { pid });
 
         sleep(Duration::from_secs(10));
 
@@ -133,7 +133,7 @@ fn reset_signals() -> () {
     }
 }
 
-fn child_pid1(read_pipe: BorrowedFd) -> isize {
+fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize> {
     let pid = unistd::Pid::this();
     nix::unistd::setpgid(pid, pid).expect("setpgid failed");
     reset_signals();
@@ -155,17 +155,26 @@ fn child_pid1(read_pipe: BorrowedFd) -> isize {
         None::<&'static str>,
     ).expect("mount proc failed");
 
-    for i in 0..10 {
+    for i in 0..2 {
         let pid = unistd::getpid();
         let uid = unistd::getuid();
         info!("From child!! {} pid = {} uid = {}", i, pid, uid);
         sleep(Duration::from_millis(1000));
     }
 
-    0
+    let exitstatus = cmd.spawn()?.wait()?;
+
+    // Child was killed, kill ourselves the same way to propagate upwards
+    if let Some(sigi32) = exitstatus.signal() {
+        let sig = Signal::try_from(sigi32)?;
+        signal::kill(unistd::getpid(), Some(sig))?;
+    }
+
+    // Return childs code upwards
+    Ok(exitstatus.code().ok_or(Error::other("Child failed"))? as isize)
 }
 
-fn clone_pid1(read_pipe: OwnedFd) -> Result<Pid> {
+fn clone_pid1(cmd: &mut process::Command, read_pipe: OwnedFd) -> Result<Pid> {
     const STACK_SIZE: usize = 1024 * 1024;
     let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
 
@@ -180,7 +189,7 @@ fn clone_pid1(read_pipe: OwnedFd) -> Result<Pid> {
 
     let child_pid = unsafe {
         sched::clone(
-            Box::new(move || child_pid1(read_pipe.as_fd())),
+            Box::new(move || child_pid1(cmd, read_pipe.as_fd()).unwrap_or(-1)),
             stack,
             clone_flags,
             sig,

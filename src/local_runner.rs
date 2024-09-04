@@ -62,7 +62,7 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
     Err(Status::internal("Wait failed"))
 }
 
-#[tracing::instrument]
+#[tracing::instrument(skip(run))]
 pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
         .iter()
