@@ -1,4 +1,5 @@
-use std::io::{Error, Result};
+use std::fs::File;
+use std::io::{Error, Result, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, ExitStatus};
@@ -9,11 +10,11 @@ use tracing::info;
 
 use nix::fcntl::OFlag;
 use nix::libc::{self, pid_t, timeval};
+use nix::mount::{self, MsFlags};
 use nix::sched::{self, CloneFlags};
 use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
-use nix::mount::{self, MsFlags};
-use nix::unistd::{self, Pid};
+use nix::unistd::{self, Gid, Pid, Uid};
 
 use crate::proto::resourceusage::PosixResourceUsage;
 
@@ -102,14 +103,31 @@ impl std::convert::From<process::Command> for Command {
 impl Command {
     pub fn spawn(&mut self) -> Result<Child> {
         let (read_pipe, write_pipe) = unistd::pipe2(OFlag::O_CLOEXEC).expect("create pipe failed");
-        let ret = clone_pid1(&mut self.inner, read_pipe).map(|pid| Child { pid });
+        let pid = clone_pid1(&mut self.inner, read_pipe)?;
 
+        write_uid_map(pid, unistd::getuid())?;
+        write_gid_map(pid, unistd::getgid())?;
         sleep(Duration::from_secs(10));
 
         unistd::write(write_pipe, "A".as_bytes()).expect("start child");
 
-        ret
+        Ok(Child { pid })
     }
+}
+
+fn write_uid_map(pid: Pid, outer_uid: Uid) -> Result<()> {
+    let uid_map_path = format!("/proc/{pid}/uid_map");
+    let buf = format!("0 {outer_uid} 1");
+    File::create(uid_map_path).and_then(|mut f| f.write_all(buf.as_bytes()))
+}
+
+fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
+    let setgroups_path = format!("/proc/{pid}/setgroups");
+    File::create(setgroups_path).and_then(|mut f| f.write_all(b"deny"))?;
+
+    let gid_map_path = format!("/proc/{pid}/gid_map");
+    let buf = format!("0 {outer_gid} 1");
+    File::create(gid_map_path).and_then(|mut f| f.write_all(buf.as_bytes()))
 }
 
 /// Resets all signal handlers and masks so nothing is inherited from parents
@@ -146,14 +164,15 @@ fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize
     unistd::chdir("/").expect("cd / failed");
     unistd::sethostname("sandbox").expect("sethostname failed");
 
-    let mount_flags = MsFlags::MS_NOSUID|MsFlags::MS_NOEXEC|MsFlags::MS_NODEV;
+    let mount_flags = MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV;
     mount::mount(
         Some("proc"),
         "/proc",
         Some("proc"),
         mount_flags,
         None::<&'static str>,
-    ).expect("mount proc failed");
+    )
+    .expect("mount proc failed");
 
     for i in 0..2 {
         let pid = unistd::getpid();
