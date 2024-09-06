@@ -55,7 +55,10 @@ impl Runner for RunnerService {
     }
 
     #[cfg(unix)]
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(
+        skip_all,
+        fields(input_root = %request.get_ref().input_root_directory)
+    )]
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,

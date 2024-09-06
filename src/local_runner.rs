@@ -30,7 +30,7 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status
 ///
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
-#[tracing::instrument(fields(child = %child.id()))]
+#[tracing::instrument(ret, fields(child = %child.id()))]
 pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
@@ -42,9 +42,7 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
             _ = sig.recv() => {
                 debug!("Received SIGCHILD");
             }
-            _ = interval.tick() => {
-                debug!("Sleep Finished");
-            }
+            _ = interval.tick() => {}
         };
 
         info!(pid = child.id(), "waiting");

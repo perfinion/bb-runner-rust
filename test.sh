@@ -22,11 +22,12 @@ echo Test Child stderr >&2
 echo "PWD: [\${PWD}]"
 pwd
 echo "Args: [\$@]"
-echo "Hostname: $(hostname)"
+echo "Hostname: \$(hostname)"
 
 env
 sleep \${1:-2}
 ls -al /proc/\$\$/ns/* >&2
+ps auxf
 [[ $dir == *2 ]] && kill \$\$
 exit 0
 EOF

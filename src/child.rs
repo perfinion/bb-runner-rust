@@ -1,9 +1,8 @@
 use std::fs::File;
 use std::io::{Error, Result, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, ExitStatus};
-use std::thread::sleep;
 use std::time::Duration;
 
 use tracing::info;
@@ -123,9 +122,8 @@ impl Command {
 
         write_uid_map(pid, unistd::getuid())?;
         write_gid_map(pid, unistd::getgid())?;
-        sleep(Duration::from_secs(10));
 
-        unistd::write(write_pipe, "A".as_bytes()).expect("start child");
+        unistd::write(write_pipe, "A".as_bytes())?;
 
         Ok(Child { pid })
     }
@@ -154,11 +152,10 @@ fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
 
 /// Resets all signal handlers and masks so nothing is inherited from parents
 /// Also sets parent death signal to SIGKILL
-fn reset_signals() -> () {
-    prctl::set_pdeathsig(Signal::SIGKILL).expect("pdeathsig");
+fn reset_signals() -> Result<()> {
+    prctl::set_pdeathsig(Signal::SIGKILL)?;
 
-    signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
-        .expect("unblocking signals");
+    signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)?;
 
     let sadfl = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
     let saign = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
@@ -176,17 +173,19 @@ fn reset_signals() -> () {
             },
         }
     }
+
+    Ok(())
 }
 
 fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     let pid = Pid::this();
     nix::unistd::setpgid(pid, pid)?;
-    reset_signals();
+    reset_signals()?;
 
     info!("In child, pid = {}, ppid = {}", pid, Pid::parent());
 
     // Block until the parent has configured our uid_map
-    let mut buf = [0; 8];
+    let mut buf = [0; 4];
     let _ = unistd::read(child_data.read_pipe.as_raw_fd(), &mut buf);
     info!("Read from pipe: {:?}", buf);
 
@@ -205,12 +204,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         None::<&'static str>,
     )?;
 
-    for i in 0..2 {
-        let pid = unistd::getpid();
-        let uid = unistd::getuid();
-        info!("From child!! {} pid = {} uid = {}", i, pid, uid);
-        sleep(Duration::from_millis(1000));
-    }
+    info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 
     let exitstatus = child_data.cmd.spawn()?.wait()?;
 
