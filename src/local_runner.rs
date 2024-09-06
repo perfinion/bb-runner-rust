@@ -30,7 +30,7 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status
 ///
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
-#[tracing::instrument]
+#[tracing::instrument(fields(child = %child.id()))]
 pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
@@ -91,6 +91,7 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.stderr(stderr_file);
 
     Command::from(command)
+        .hostname("localhost")
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
 }

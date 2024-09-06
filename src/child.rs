@@ -88,13 +88,21 @@ pub trait Wait4 {
 #[derive(Debug)]
 pub struct Command {
     inner: process::Command,
+    hostname: Option<String>,
     namespaces: CloneFlags,
+}
+
+struct ChildData<'a> {
+    cmd: &'a mut process::Command,
+    read_pipe: BorrowedFd<'a>,
+    hostname: Option<&'a str>,
 }
 
 impl std::convert::From<process::Command> for Command {
     fn from(source: process::Command) -> Self {
         Self {
             inner: source,
+            hostname: None,
             namespaces: CloneFlags::empty(),
         }
     }
@@ -102,8 +110,16 @@ impl std::convert::From<process::Command> for Command {
 
 impl Command {
     pub fn spawn(&mut self) -> Result<Child> {
-        let (read_pipe, write_pipe) = unistd::pipe2(OFlag::O_CLOEXEC).expect("create pipe failed");
-        let pid = clone_pid1(&mut self.inner, read_pipe)?;
+        let (read_pipe, write_pipe) = unistd::pipe2(OFlag::O_CLOEXEC)?;
+
+        let mut child_data = ChildData {
+            cmd: &mut self.inner,
+            read_pipe: read_pipe.as_fd(),
+            hostname: self.hostname.as_ref().map(String::as_ref),
+        };
+
+        let pid = clone_pid1(&mut child_data)?;
+        drop(read_pipe);
 
         write_uid_map(pid, unistd::getuid())?;
         write_gid_map(pid, unistd::getgid())?;
@@ -112,6 +128,12 @@ impl Command {
         unistd::write(write_pipe, "A".as_bytes()).expect("start child");
 
         Ok(Child { pid })
+    }
+
+    pub fn hostname(&mut self, hostname: &str) -> &mut Command {
+        self.hostname = Some(hostname.to_string());
+        self.namespaces |= CloneFlags::CLONE_NEWUTS;
+        self
     }
 }
 
@@ -138,31 +160,41 @@ fn reset_signals() -> () {
     signal::sigprocmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
         .expect("unblocking signals");
 
-    let sa = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+    let sadfl = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+    let saign = signal::SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
     for s in Signal::iterator() {
         match s {
             // SIGKILL and SIGSTOP are not handleable
             Signal::SIGKILL | Signal::SIGSTOP => {}
+            // Ignore TTY signals
+            Signal::SIGTTIN | Signal::SIGTTOU => unsafe {
+                let _ = signal::sigaction(s, &saign);
+            },
             // Dont care what they previously were
             s => unsafe {
-                let _ = signal::sigaction(s, &sa);
+                let _ = signal::sigaction(s, &sadfl);
             },
         }
     }
 }
 
-fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize> {
-    let pid = unistd::Pid::this();
-    nix::unistd::setpgid(pid, pid).expect("setpgid failed");
+fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
+    let pid = Pid::this();
+    nix::unistd::setpgid(pid, pid)?;
     reset_signals();
 
+    info!("In child, pid = {}, ppid = {}", pid, Pid::parent());
+
+    // Block until the parent has configured our uid_map
     let mut buf = [0; 8];
-    let _ = unistd::read(read_pipe.as_raw_fd(), &mut buf);
+    let _ = unistd::read(child_data.read_pipe.as_raw_fd(), &mut buf);
     info!("Read from pipe: {:?}", buf);
 
     // cd / before mounting in case we were keeping something busy
-    unistd::chdir("/").expect("cd / failed");
-    unistd::sethostname("sandbox").expect("sethostname failed");
+    unistd::chdir("/")?;
+    if let Some(h) = child_data.hostname {
+        unistd::sethostname(h)?;
+    }
 
     let mount_flags = MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV;
     mount::mount(
@@ -171,8 +203,7 @@ fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize
         Some("proc"),
         mount_flags,
         None::<&'static str>,
-    )
-    .expect("mount proc failed");
+    )?;
 
     for i in 0..2 {
         let pid = unistd::getpid();
@@ -181,7 +212,7 @@ fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize
         sleep(Duration::from_millis(1000));
     }
 
-    let exitstatus = cmd.spawn()?.wait()?;
+    let exitstatus = child_data.cmd.spawn()?.wait()?;
 
     // Child was killed, kill ourselves the same way to propagate upwards
     if let Some(sigi32) = exitstatus.signal() {
@@ -193,7 +224,7 @@ fn child_pid1(cmd: &mut process::Command, read_pipe: BorrowedFd) -> Result<isize
     Ok(exitstatus.code().ok_or(Error::other("Child failed"))? as isize)
 }
 
-fn clone_pid1(cmd: &mut process::Command, read_pipe: OwnedFd) -> Result<Pid> {
+fn clone_pid1(child_data: &mut ChildData) -> Result<Pid> {
     const STACK_SIZE: usize = 1024 * 1024;
     let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
 
@@ -208,7 +239,7 @@ fn clone_pid1(cmd: &mut process::Command, read_pipe: OwnedFd) -> Result<Pid> {
 
     let child_pid = unsafe {
         sched::clone(
-            Box::new(move || child_pid1(cmd, read_pipe.as_fd()).unwrap_or(-1)),
+            Box::new(move || child_pid1(child_data).unwrap_or(-1)),
             stack,
             clone_flags,
             sig,
