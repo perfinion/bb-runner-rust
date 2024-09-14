@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{Error, Result, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, ExitStatus};
 use std::time::Duration;
@@ -8,7 +8,7 @@ use std::time::Duration;
 use tracing::info;
 
 use nix::fcntl::OFlag;
-use nix::libc::{self, pid_t, timeval};
+use nix::libc::{self, c_uint, pid_t, timeval};
 use nix::mount::{self, MsFlags};
 use nix::sched::{self, CloneFlags};
 use nix::sys::prctl;
@@ -87,6 +87,8 @@ pub trait Wait4 {
 #[derive(Debug)]
 pub struct Command {
     inner: process::Command,
+    stdout: Option<File>,
+    stderr: Option<File>,
     hostname: Option<String>,
     namespaces: CloneFlags,
 }
@@ -94,6 +96,8 @@ pub struct Command {
 struct ChildData<'a> {
     cmd: &'a mut process::Command,
     read_pipe: BorrowedFd<'a>,
+    stdout: Option<RawFd>,
+    stderr: Option<RawFd>,
     hostname: Option<&'a str>,
 }
 
@@ -101,6 +105,8 @@ impl std::convert::From<process::Command> for Command {
     fn from(source: process::Command) -> Self {
         Self {
             inner: source,
+            stdout: None,
+            stderr: None,
             hostname: None,
             namespaces: CloneFlags::empty(),
         }
@@ -114,6 +120,8 @@ impl Command {
         let mut child_data = ChildData {
             cmd: &mut self.inner,
             read_pipe: read_pipe.as_fd(),
+            stdout: self.stdout.as_ref().map(|s| s.as_raw_fd()),
+            stderr: self.stderr.as_ref().map(|s| s.as_raw_fd()),
             hostname: self.hostname.as_ref().map(String::as_ref),
         };
 
@@ -126,6 +134,16 @@ impl Command {
         unistd::write(write_pipe, "A".as_bytes())?;
 
         Ok(Child { pid })
+    }
+
+    pub fn stdout(&mut self, f: File) -> &mut Command {
+        self.stdout = Some(f);
+        self
+    }
+
+    pub fn stderr(&mut self, f: File) -> &mut Command {
+        self.stderr = Some(f);
+        self
     }
 
     pub fn hostname(&mut self, hostname: &str) -> &mut Command {
@@ -177,6 +195,14 @@ fn reset_signals() -> Result<()> {
     Ok(())
 }
 
+fn close_range_fds(first: c_uint) -> Result<()> {
+    match unsafe { nix::libc::close_range(first, c_uint::MAX, 0) } {
+        0 => Ok(()),
+        -1 => Err(Error::from(nix::errno::Errno::last())),
+        _ => Err(Error::other("close_range failed")),
+    }
+}
+
 fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     let pid = Pid::this();
     nix::unistd::setpgid(pid, pid)?;
@@ -206,7 +232,20 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 
-    let exitstatus = child_data.cmd.spawn()?.wait()?;
+    // Setup child stdio and close everything else
+    if let Some(stdout) = child_data.stdout {
+        let _ = unistd::dup2(stdout, libc::STDOUT_FILENO)?;
+    }
+    if let Some(stderr) = child_data.stderr {
+        let _ = unistd::dup2(stderr, libc::STDERR_FILENO)?;
+    }
+    close_range_fds((libc::STDERR_FILENO as c_uint) + 1)?;
+
+    let mut child = child_data.cmd.spawn()?;
+
+    // File descriptors are for child, close everything in pid1
+    close_range_fds(0)?;
+    let exitstatus = child.wait()?;
 
     // Child was killed, kill ourselves the same way to propagate upwards
     if let Some(sigi32) = exitstatus.signal() {

@@ -85,10 +85,12 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.env_clear();
     command.envs(&run.environment_variables);
     command.stdin(Stdio::null());
-    command.stdout(stdout_file);
-    command.stderr(stderr_file);
+    command.stdout(Stdio::inherit());
+    command.stderr(Stdio::inherit());
 
     Command::from(command)
+        .stdout(stdout_file)
+        .stderr(stderr_file)
         .hostname("localhost")
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
