@@ -108,7 +108,12 @@ impl std::convert::From<process::Command> for Command {
             stdout: None,
             stderr: None,
             hostname: None,
-            namespaces: CloneFlags::empty(),
+            namespaces: CloneFlags::CLONE_NEWCGROUP
+                | CloneFlags::CLONE_NEWPID
+                | CloneFlags::CLONE_NEWIPC
+                | CloneFlags::CLONE_NEWNET
+                | CloneFlags::CLONE_NEWNS
+                | CloneFlags::CLONE_NEWUSER,
         }
     }
 }
@@ -125,7 +130,7 @@ impl Command {
             hostname: self.hostname.as_ref().map(String::as_ref),
         };
 
-        let pid = clone_pid1(&mut child_data)?;
+        let pid = clone_pid1(self.namespaces, &mut child_data)?;
         drop(read_pipe);
 
         write_uid_map(pid, unistd::getuid())?;
@@ -217,6 +222,16 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 
     // cd / before mounting in case we were keeping something busy
     unistd::chdir("/")?;
+
+    // Fully isolate our namespace from parent
+    mount::mount(
+        None::<&'static str>,
+        "/",
+        None::<&'static str>,
+        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+        None::<&'static str>,
+    )?;
+
     if let Some(h) = child_data.hostname {
         unistd::sethostname(h)?;
     }
@@ -257,18 +272,11 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     Ok(exitstatus.code().ok_or(Error::other("Child failed"))? as isize)
 }
 
-fn clone_pid1(child_data: &mut ChildData) -> Result<Pid> {
+fn clone_pid1(clone_flags: CloneFlags, child_data: &mut ChildData) -> Result<Pid> {
     const STACK_SIZE: usize = 1024 * 1024;
     let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
 
     let sig = Some(Signal::SIGCHLD as i32);
-    let clone_flags = CloneFlags::CLONE_NEWCGROUP
-        | CloneFlags::CLONE_NEWPID
-        | CloneFlags::CLONE_NEWIPC
-        | CloneFlags::CLONE_NEWNET
-        | CloneFlags::CLONE_NEWNS
-        | CloneFlags::CLONE_NEWUSER
-        | CloneFlags::CLONE_NEWUTS;
 
     let child_pid = unsafe {
         sched::clone(
