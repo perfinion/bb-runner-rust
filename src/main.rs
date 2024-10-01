@@ -1,7 +1,12 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
+use std::thread;
+use tokio::sync::Mutex;
+use tonic::Result as TonicResult;
 use tonic::{transport::Server, Status};
 use tracing::{self, debug, info, warn};
 
@@ -31,8 +36,41 @@ use local_runner::{spawn_child, wait_child};
 
 pub mod child;
 
+#[derive(Clone, Debug)]
+struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);
+
+impl ProcessorQueue {
+    pub fn new(deque: VecDeque<u32>) -> Self {
+        Self(Arc::new(Mutex::new(deque)))
+    }
+
+    pub async fn take_cpu(&self) -> TonicResult<u32> {
+        let m = self.0.clone();
+        let mut q = m.lock().await;
+        q.pop_front()
+            .ok_or(Status::resource_exhausted("No available concurrency slots"))
+    }
+
+    pub async fn give_cpu(&self, cpu: u32) {
+        let m = self.0.clone();
+        let mut q = m.lock().await;
+        q.push_back(cpu)
+    }
+}
+
 #[derive(Debug)]
-struct RunnerService;
+struct RunnerService {
+    processors: ProcessorQueue,
+}
+
+impl RunnerService {
+    pub fn new(nproc: u32) -> RunnerService {
+        let p: Vec<u32> = (0..nproc).collect();
+        Self {
+            processors: ProcessorQueue::new(p.into()),
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl Runner for RunnerService {
@@ -40,7 +78,7 @@ impl Runner for RunnerService {
     async fn check_readiness(
         &self,
         request: tonic::Request<CheckReadinessRequest>,
-    ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+    ) -> TonicResult<tonic::Response<()>> {
         let readyreq = request.get_ref();
 
         debug!("CheckReadiness = {:?}", request);
@@ -62,19 +100,22 @@ impl Runner for RunnerService {
     async fn run(
         &self,
         request: tonic::Request<RunRequest>,
-    ) -> std::result::Result<tonic::Response<RunResponse>, tonic::Status> {
+    ) -> TonicResult<tonic::Response<RunResponse>> {
         let conn_info = request.extensions().get::<UdsConnectInfo>().unwrap();
         let run = request.get_ref();
 
         info!("Run Request = {:#?}", run);
         debug!("Run Connection Info = {:?}", conn_info);
 
-        let mut child = spawn_child(&run)?;
+        let processor = self.processors.take_cpu().await?;
+
+        let mut child = spawn_child(processor, &run)?;
         let pid = child.id();
-        debug!("Started process: {}", pid);
+        debug!("Started process: {} job {}", pid, processor);
 
         let exit_resuse = wait_child(&mut child).await;
         info!("\nChild {} exit = {:#?}", pid, exit_resuse);
+        self.processors.give_cpu(processor).await;
 
         let exit_code = match exit_resuse {
             Ok(ref e) => e.status.code(),
@@ -126,7 +167,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("Failed to create socket: {:?}", error);
     });
 
-    let bb_runner = RunnerService {};
+    let nproc: u32 = match thread::available_parallelism() {
+        Ok(p) => p.get() as u32,
+        _ => 8,
+    };
+    warn!("Number of processors = {}", nproc);
+
+    let bb_runner = RunnerService::new(nproc);
     let svc = RunnerServer::new(bb_runner);
 
     warn!("Starting Buildbarn Runner ...");

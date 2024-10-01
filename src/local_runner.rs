@@ -2,6 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
+use tonic::Result as TonicResult;
 use tonic::Status;
 use tracing::{self, debug, error, info, warn};
 
@@ -10,7 +11,7 @@ use crate::proto::runner::RunRequest;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status> {
+fn workdir_file(run: &RunRequest, wdname: &String) -> TonicResult<File> {
     let wdpath: PathBuf = [&run.input_root_directory, &run.working_directory, &wdname]
         .iter()
         .collect();
@@ -31,7 +32,7 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> Result<File, tonic::Status
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
 #[tracing::instrument(ret, fields(child = %child.id()))]
-pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
+pub async fn wait_child(child: &mut Child) -> TonicResult<ResUse> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
 
@@ -61,7 +62,7 @@ pub async fn wait_child(child: &mut Child) -> Result<ResUse, tonic::Status> {
 }
 
 #[tracing::instrument(skip(run))]
-pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
+pub fn spawn_child(processor: u32, run: &RunRequest) -> TonicResult<Child> {
     let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
         .iter()
         .collect();
@@ -88,10 +89,12 @@ pub fn spawn_child(run: &RunRequest) -> Result<Child, tonic::Status> {
     command.stdout(Stdio::inherit());
     command.stderr(Stdio::inherit());
 
+    let cgname = format!("{processor}");
     Command::from(command)
         .stdout(stdout_file)
         .stderr(stderr_file)
         .hostname("localhost")
+        .cgroup(cgname.as_str())
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
 }

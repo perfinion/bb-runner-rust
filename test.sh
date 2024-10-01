@@ -19,10 +19,10 @@ create_test_files() {
 echo Test Child in ${dir}
 echo Test Child stderr >&2
 
-echo "PWD: [\${PWD}]"
-pwd
+echo -n "PWD: [\${PWD}] "; pwd
 echo "Args: [\$@]"
 echo "Hostname: \$(hostname)"
+echo -n "nproc: "; nproc
 
 env
 sleep \${1:-2}
@@ -64,7 +64,10 @@ send_run() {
         buildbarn.runner.Runner/Run <<EOM
 {
   "arguments": [
-    "run.sh",
+    "/usr/bin/time",
+    "-v",
+    "bash",
+    "./run.sh",
     "${time}",
     "bar"
   ],

@@ -1,7 +1,8 @@
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
 use std::time::Duration;
 
@@ -24,7 +25,7 @@ const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "io
 };
 
 /// Resources used by a process
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ResourceUsage {
     /// User CPU time used
     ///
@@ -60,7 +61,7 @@ impl Into<PosixResourceUsage> for ResourceUsage {
 }
 
 /// Resources used by a process and its exit status
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ResUse {
     /// Same as the one returned by [`wait`].
     ///
@@ -90,6 +91,7 @@ pub struct Command {
     stdout: Option<File>,
     stderr: Option<File>,
     hostname: Option<String>,
+    cgroup: Option<String>,
     namespaces: CloneFlags,
 }
 
@@ -108,8 +110,8 @@ impl std::convert::From<process::Command> for Command {
             stdout: None,
             stderr: None,
             hostname: None,
-            namespaces: CloneFlags::CLONE_NEWCGROUP
-                | CloneFlags::CLONE_NEWPID
+            cgroup: None,
+            namespaces: CloneFlags::CLONE_NEWPID
                 | CloneFlags::CLONE_NEWIPC
                 | CloneFlags::CLONE_NEWNET
                 | CloneFlags::CLONE_NEWNS
@@ -135,6 +137,9 @@ impl Command {
 
         write_uid_map(pid, unistd::getuid())?;
         write_gid_map(pid, unistd::getgid())?;
+        if let Some(cg) = self.cgroup.as_ref().map(String::as_ref) {
+            move_child_cgroup(pid, cg)?;
+        }
 
         unistd::write(write_pipe, "A".as_bytes())?;
 
@@ -148,6 +153,12 @@ impl Command {
 
     pub fn stderr(&mut self, f: File) -> &mut Command {
         self.stderr = Some(f);
+        self
+    }
+
+    pub fn cgroup(&mut self, cg: &str) -> &mut Command {
+        self.cgroup = Some(cg.to_string());
+        self.namespaces |= CloneFlags::CLONE_NEWCGROUP;
         self
     }
 
@@ -171,6 +182,41 @@ fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
     let gid_map_path = format!("/proc/{pid}/gid_map");
     let buf = format!("0 {outer_gid} 1");
     File::create(gid_map_path).and_then(|mut f| f.write_all(buf.as_bytes()))
+}
+
+#[tracing::instrument(ret)]
+fn move_child_cgroup(pid: Pid, jobcpu: &str) -> Result<()> {
+    let cgroup_root = Path::new("/sys/fs/cgroup/bb_runner");
+    let cgroup_dir: PathBuf = cgroup_root.join(format!("job{jobcpu}"));
+    if !cgroup_dir.exists() {
+        std::fs::create_dir(&cgroup_dir)?;
+    }
+
+    let cgproc = format!("{pid}");
+    OpenOptions::new()
+        .append(true)
+        .open(cgroup_dir.join("cgroup.procs"))
+        .and_then(|mut f| f.write_all(cgproc.as_bytes()))?;
+
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(cgroup_dir.join("cpuset.cpus"))
+        .and_then(|mut f| f.write_all(jobcpu.as_bytes()))?;
+
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(cgroup_dir.join("memory.swap.max"))
+        .and_then(|mut f| f.write_all(b"0"))?;
+
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(cgroup_dir.join("memory.max"))
+        .and_then(|mut f| f.write_all(b"1073741824"))?;
+
+    Ok(())
 }
 
 /// Resets all signal handlers and masks so nothing is inherited from parents
