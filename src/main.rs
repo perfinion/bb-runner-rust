@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tonic::Result as TonicResult;
 use tonic::{transport::Server, Status};
 use tracing::{self, debug, info, warn};
@@ -16,6 +17,8 @@ use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tonic::transport::server::UdsConnectInfo;
+
+use crate::child::ResUse;
 
 use prost_types::Any as PbAny;
 use proto::resourceusage::PosixResourceUsage;
@@ -101,21 +104,34 @@ impl Runner for RunnerService {
         &self,
         request: tonic::Request<RunRequest>,
     ) -> TonicResult<tonic::Response<RunResponse>> {
-        let conn_info = request.extensions().get::<UdsConnectInfo>().unwrap();
-        let run = request.get_ref();
-
+        let (meta, exts, run) = request.into_parts();
         info!("Run Request = {:#?}", run);
-        debug!("Run Connection Info = {:?}", conn_info);
 
-        let processor = self.processors.take_cpu().await?;
+        debug!("MetadataMap: {:?}", meta);
+        if let Some(conn_info) = exts.get::<UdsConnectInfo>() {
+            debug!("Run Connection Info = {:?}", conn_info);
+        }
 
-        let mut child = spawn_child(processor, &run)?;
-        let pid = child.id();
-        debug!("Started process: {} job {}", pid, processor);
+        // If RPC is cancelled, this task is dropped immediately, must spawn child in a
+        // separate task to be able to kill & reap child
+        let procque = self.processors.clone();
 
-        let exit_resuse = wait_child(&mut child).await;
-        info!("\nChild {} exit = {:#?}", pid, exit_resuse);
-        self.processors.give_cpu(processor).await;
+        let childtask: JoinHandle<TonicResult<ResUse>> = tokio::spawn(async move {
+            let processor = procque.take_cpu().await?;
+            let mut child = spawn_child(processor, &run)?;
+            let pid = child.id();
+            debug!("Started process: {} job {}", pid, processor);
+
+            let exit_resuse = wait_child(&mut child).await;
+            info!("\nChild {} exit = {:#?}", pid, exit_resuse);
+
+            procque.give_cpu(processor).await;
+            exit_resuse
+        });
+
+        let exit_resuse = childtask
+            .await
+            .map_err(|_| Status::internal("No Exit Code"))?;
 
         let exit_code = match exit_resuse {
             Ok(ref e) => e.status.code(),
