@@ -345,6 +345,10 @@ impl Child {
     pub fn id(&self) -> u32 {
         pid_t::from(self.pid) as u32
     }
+
+    pub fn kill(&mut self) -> Result<()> {
+        Ok(signal::kill(self.pid, Some(Signal::SIGKILL))?)
+    }
 }
 
 #[allow(clippy::useless_conversion)]

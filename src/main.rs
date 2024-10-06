@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tonic::Result as TonicResult;
 use tonic::{transport::Server, Status};
 use tracing::{self, debug, info, warn};
@@ -114,6 +115,8 @@ impl Runner for RunnerService {
 
         // If RPC is cancelled, this task is dropped immediately, must spawn child in a
         // separate task to be able to kill & reap child
+        let token = CancellationToken::new();
+        let _cancel_guard = token.clone().drop_guard();
         let procque = self.processors.clone();
 
         let childtask: JoinHandle<TonicResult<ResUse>> = tokio::spawn(async move {
@@ -122,7 +125,7 @@ impl Runner for RunnerService {
             let pid = child.id();
             debug!("Started process: {} job {}", pid, processor);
 
-            let exit_resuse = wait_child(&mut child).await;
+            let exit_resuse = wait_child(&mut child, token).await;
             info!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
             procque.give_cpu(processor).await;

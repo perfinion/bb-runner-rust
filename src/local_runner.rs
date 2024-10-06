@@ -2,6 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio_util::sync::CancellationToken;
 use tonic::Result as TonicResult;
 use tonic::Status;
 use tracing::{self, debug, error, info, warn};
@@ -32,9 +33,10 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> TonicResult<File> {
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
 #[tracing::instrument(ret, fields(child = %child.id()))]
-pub async fn wait_child(child: &mut Child) -> TonicResult<ResUse> {
+pub async fn wait_child(child: &mut Child, token: CancellationToken) -> TonicResult<ResUse> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
+    let mut kill_sent: bool = false;
 
     loop {
         // The first tick() always finishes immediately, so we can try the child right away in case
@@ -44,9 +46,23 @@ pub async fn wait_child(child: &mut Child) -> TonicResult<ResUse> {
                 debug!("Received SIGCHILD");
             }
             _ = interval.tick() => {}
+            _ = token.cancelled(), if !kill_sent => {
+                // The token was cancelled, send SIGKILL to start cleanup
+                // Only need to kill the direct child, it is pid1 in the PID namespace which forces
+                // cleanup of all processes in the namespace.
+                match child.kill() {
+                    Ok(_) => kill_sent = true,
+                    _ => {},
+                }
+            }
         };
 
-        info!(pid = child.id(), "waiting");
+        info!(
+            pid = child.id(),
+            cancelled = token.is_cancelled(),
+            kill_sent = kill_sent,
+            "waiting"
+        );
         match child.try_wait4() {
             Ok(None) => {}
             Ok(Some(e)) => return Ok(e),
