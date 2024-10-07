@@ -10,16 +10,17 @@ path = "src/main.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tonic = "0.11"
-prost = "0.12"
-prost-types = "0.12"
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
 tokio = { version = "1.0", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util = { version = "0.7" }
 nix = { version = "0.29.0", features = ["fs", "hostname", "mount", "process", "sched", "signal", "user"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tonic-reflection = "0.12.3"
 
 [build-dependencies]
-tonic-build = "0.11"
-prost-build = "0.12"
+tonic-build = "0.12"
+prost-build = "0.13"

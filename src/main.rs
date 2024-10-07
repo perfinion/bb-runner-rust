@@ -33,6 +33,8 @@ pub mod proto {
     pub mod runner {
         tonic::include_proto!("buildbarn.runner");
     }
+    pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("bb_descriptor");
 }
 
 mod local_runner;
@@ -195,9 +197,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bb_runner = RunnerService::new(nproc);
     let svc = RunnerServer::new(bb_runner);
 
+    let reflection_svc = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+        .build_v1()?;
+
     warn!("Starting Buildbarn Runner ...");
     Server::builder()
         .add_service(svc)
+        .add_service(reflection_svc)
         .serve_with_incoming(socket_stream)
         .await?;
 
