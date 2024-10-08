@@ -17,6 +17,7 @@ use crate::service::RunnerService;
 
 pub mod child;
 mod local_runner;
+mod resource;
 mod service;
 
 pub mod proto {

@@ -16,8 +16,8 @@ use crate::proto::resourceusage::PosixResourceUsage;
 use crate::proto::runner::runner_server::Runner;
 use crate::proto::runner::{CheckReadinessRequest, RunRequest, RunResponse};
 
-use crate::child::ResUse;
 use crate::local_runner::{spawn_child, wait_child};
+use crate::resource::ResUse;
 
 #[derive(Clone, Debug)]
 struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);

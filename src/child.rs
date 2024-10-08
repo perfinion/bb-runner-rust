@@ -16,60 +16,13 @@ use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::unistd::{self, Gid, Pid, Uid};
 
-use crate::proto::resourceusage::PosixResourceUsage;
+use crate::resource::{ResUse, ResourceUsage};
 
 const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
     1
 } else {
     1024
 };
-
-/// Resources used by a process
-#[derive(Clone, Copy, Debug)]
-pub struct ResourceUsage {
-    /// User CPU time used
-    ///
-    /// Time spent in user-mode
-    pub utime: Duration,
-    /// System CPU time used
-    ///
-    /// Time spent in kernel-mode
-    pub stime: Duration,
-    /// Maximum resident set size, in bytes.
-    ///
-    /// Zero if not available on the platform.
-    pub maxrss: u64,
-}
-
-impl Into<PosixResourceUsage> for ResourceUsage {
-    fn into(self) -> PosixResourceUsage {
-        let mut pbres = PosixResourceUsage::default();
-        if let Ok(n) = prost_types::Duration::try_from(self.utime) {
-            pbres.user_time = Some(n);
-        }
-
-        if let Ok(n) = prost_types::Duration::try_from(self.stime) {
-            pbres.system_time = Some(n);
-        }
-
-        if let Ok(n) = i64::try_from(self.maxrss) {
-            pbres.maximum_resident_set_size = n;
-        }
-
-        pbres
-    }
-}
-
-/// Resources used by a process and its exit status
-#[derive(Clone, Copy, Debug)]
-pub struct ResUse {
-    /// Same as the one returned by [`wait`].
-    ///
-    /// [`wait`]: std::process::Child::wait
-    pub status: ExitStatus,
-    /// Resource used by the process and all its children
-    pub rusage: ResourceUsage,
-}
 
 /// Add wait for a process and return the resources it used.
 pub trait Wait4 {

@@ -7,8 +7,9 @@ use tonic::Result as TonicResult;
 use tonic::Status;
 use tracing::{self, debug, error, info, warn};
 
-use crate::child::{Child, Command, ResUse, Wait4};
+use crate::child::{Child, Command, Wait4};
 use crate::proto::runner::RunRequest;
+use crate::resource::ResUse;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
