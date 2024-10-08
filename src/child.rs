@@ -16,7 +16,7 @@ use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::unistd::{self, Gid, Pid, Uid};
 
-use crate::resource::{ResUse, ResourceUsage};
+use crate::resource::{ExitResources, ResourceUsage};
 
 const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
     1
@@ -25,7 +25,7 @@ const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "io
 };
 
 /// Add wait for a process and return the resources it used.
-pub trait Wait4 {
+pub(crate) trait Wait4 {
     /// As for [`wait`], it waits for the child to exit completely,
     /// returning the status that it exited with and an estimate of
     /// the time and memory resources it used.
@@ -35,11 +35,11 @@ pub trait Wait4 {
     /// for it.
     ///
     /// [`try_wait`]: std::process::Child::try_wait
-    fn try_wait4(&mut self) -> Result<Option<ResUse>>;
+    fn try_wait4(&mut self) -> Result<Option<ExitResources>>;
 }
 
 #[derive(Debug)]
-pub struct Command {
+pub(crate) struct Command {
     inner: process::Command,
     stdout: Option<File>,
     stderr: Option<File>,
@@ -290,7 +290,7 @@ fn clone_pid1(clone_flags: CloneFlags, child_data: &mut ChildData) -> Result<Pid
 }
 
 #[derive(Debug)]
-pub struct Child {
+pub(crate) struct Child {
     pid: Pid,
 }
 
@@ -310,7 +310,7 @@ fn timeval_to_duration(val: timeval) -> Duration {
     Duration::from_micros(v as u64)
 }
 
-fn wait4(pid: pid_t, options: i32) -> Result<Option<ResUse>> {
+fn wait4(pid: pid_t, options: i32) -> Result<Option<ExitResources>> {
     let mut status = 0;
     let mut rusage = std::mem::MaybeUninit::zeroed();
 
@@ -323,7 +323,7 @@ fn wait4(pid: pid_t, options: i32) -> Result<Option<ResUse>> {
     } else {
         let rusage = unsafe { rusage.assume_init() };
 
-        Ok(Some(ResUse {
+        Ok(Some(ExitResources {
             status: ExitStatus::from_raw(status),
             rusage: ResourceUsage {
                 utime: timeval_to_duration(rusage.ru_utime),
@@ -335,7 +335,7 @@ fn wait4(pid: pid_t, options: i32) -> Result<Option<ResUse>> {
 }
 
 impl Wait4 for Child {
-    fn try_wait4(&mut self) -> Result<Option<ResUse>> {
+    fn try_wait4(&mut self) -> Result<Option<ExitResources>> {
         let pid = self.id() as i32;
 
         wait4(pid, libc::WNOHANG)

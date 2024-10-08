@@ -9,7 +9,7 @@ use tracing::{self, debug, error, info, warn};
 
 use crate::child::{Child, Command, Wait4};
 use crate::proto::runner::RunRequest;
-use crate::resource::ResUse;
+use crate::resource::ExitResources;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -34,7 +34,10 @@ fn workdir_file(run: &RunRequest, wdname: &String) -> TonicResult<File> {
 /// TL;DR: Wait for SIGCHILD, and also just timeout and test once in a while anyway, will
 /// eventually reap the child.
 #[tracing::instrument(ret, fields(child = %child.id()))]
-pub async fn wait_child(child: &mut Child, token: CancellationToken) -> TonicResult<ResUse> {
+pub(crate) async fn wait_child(
+    child: &mut Child,
+    token: CancellationToken,
+) -> TonicResult<ExitResources> {
     let mut sig = signal(SignalKind::child())?;
     let mut interval = tokio::time::interval(WAIT_INTERVAL);
     let mut kill_sent: bool = false;
@@ -79,7 +82,7 @@ pub async fn wait_child(child: &mut Child, token: CancellationToken) -> TonicRes
 }
 
 #[tracing::instrument(skip(run))]
-pub fn spawn_child(processor: u32, run: &RunRequest) -> TonicResult<Child> {
+pub(crate) fn spawn_child(processor: u32, run: &RunRequest) -> TonicResult<Child> {
     let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
         .iter()
         .collect();

@@ -17,13 +17,13 @@ use crate::proto::runner::runner_server::Runner;
 use crate::proto::runner::{CheckReadinessRequest, RunRequest, RunResponse};
 
 use crate::local_runner::{spawn_child, wait_child};
-use crate::resource::ResUse;
+use crate::resource::ExitResources;
 
 #[derive(Clone, Debug)]
 struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);
 
 #[derive(Debug)]
-pub struct RunnerService {
+pub(crate) struct RunnerService {
     processors: ProcessorQueue,
 }
 
@@ -98,7 +98,7 @@ impl Runner for RunnerService {
         let _cancel_guard = token.clone().drop_guard();
         let procque = self.processors.clone();
 
-        let childtask: JoinHandle<TonicResult<ResUse>> = tokio::spawn(async move {
+        let childtask: JoinHandle<TonicResult<ExitResources>> = tokio::spawn(async move {
             let processor = procque.take_cpu().await?;
             let mut child = spawn_child(processor, &run)?;
             let pid = child.id();

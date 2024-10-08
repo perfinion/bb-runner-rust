@@ -15,16 +15,16 @@ use tokio_stream::wrappers::UnixListenerStream;
 use crate::proto::runner::runner_server::RunnerServer;
 use crate::service::RunnerService;
 
-pub mod child;
+mod child;
 mod local_runner;
 mod resource;
 mod service;
 
-pub mod proto {
-    pub mod resourceusage {
+pub(crate) mod proto {
+    pub(crate) mod resourceusage {
         tonic::include_proto!("buildbarn.resourceusage");
     }
-    pub mod runner {
+    pub(crate) mod runner {
         tonic::include_proto!("buildbarn.runner");
     }
     pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =

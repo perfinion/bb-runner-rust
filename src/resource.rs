@@ -5,7 +5,7 @@ use crate::proto::resourceusage::PosixResourceUsage;
 
 /// Resources used by a process
 #[derive(Clone, Copy, Debug)]
-pub struct ResourceUsage {
+pub(crate) struct ResourceUsage {
     /// User CPU time used
     ///
     /// Time spent in user-mode
@@ -22,7 +22,7 @@ pub struct ResourceUsage {
 
 /// Resources used by a process and its exit status
 #[derive(Clone, Copy, Debug)]
-pub struct ResUse {
+pub(crate) struct ExitResources {
     /// Same as the one returned by [`wait`].
     ///
     /// [`wait`]: std::process::Child::wait
