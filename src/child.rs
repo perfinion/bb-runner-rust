@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
 use std::time::Duration;
 
-use tracing::info;
+use tracing::{debug, error, info, trace};
 
+use nix::errno::Errno;
 use nix::fcntl::OFlag;
 use nix::libc::{self, c_uint, pid_t, timeval};
 use nix::mount::{self, MsFlags};
@@ -16,6 +17,7 @@ use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::unistd::{self, Gid, Pid, Uid};
 
+use crate::mounts::{MntEntOpener, MntEntWrapper};
 use crate::resource::{ExitResources, ResourceUsage};
 
 const RSS_MULTIPLIER: u64 = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
@@ -207,6 +209,45 @@ fn close_range_fds(first: c_uint) -> Result<()> {
     }
 }
 
+fn remount_all_readonly() -> Result<()> {
+    let mntent = MntEntOpener::new(Path::new("/proc/self/mounts"))?;
+
+    let entries: Vec<MntEntWrapper> = mntent.list_all()?;
+    for ent in entries {
+        trace!("Mount Entry = {} = {:?}", ent.mnt_dir, ent);
+        if ent.mnt_dir.starts_with("/dev") {
+            continue;
+        }
+
+        // https://github.com/bazelbuild/bazel/blob/788b6080f54c6ca5093526023dfd9b12b90403f8/src/main/tools/linux-sandbox-pid1.cc#L346
+        // MS_REMOUNT does not allow us to change certain flags. This means, we have
+        // to first read them out and then pass them in back again. There seems to
+        // be no better way than this (an API for just getting the mount flags of a
+        // mount entry as a bitmask would be great).
+
+        match mount::mount(
+            None::<&'static str>,
+            Path::new(ent.mnt_dir.as_str()),
+            None::<&'static str>,
+            ent.mnt_flags | MsFlags::MS_REMOUNT | MsFlags::MS_BIND | MsFlags::MS_RDONLY,
+            None::<&'static str>,
+        ) {
+            Ok(_) => {}
+            Err(Errno::EACCES) | Err(Errno::EPERM) | Err(Errno::EINVAL) | Err(Errno::ENOENT)
+            | Err(Errno::ESTALE) | Err(Errno::ENODEV) => {
+                // See: https://github.com/bazelbuild/bazel/blob/788b6080f54c6ca5093526023dfd9b12b90403f8/src/main/tools/linux-sandbox-pid1.cc#L376
+                info!("Failed to remount {}, ignored", ent.mnt_dir);
+            }
+            Err(e) => {
+                error!("Failure to remount {}, errno = {}", ent.mnt_dir, e);
+                return Err(e.into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     let pid = Pid::this();
     nix::unistd::setpgid(pid, pid)?;
@@ -243,6 +284,8 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         mount_flags,
         None::<&'static str>,
     )?;
+
+    remount_all_readonly()?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 

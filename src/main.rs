@@ -17,6 +17,7 @@ use crate::service::RunnerService;
 
 mod child;
 mod local_runner;
+mod mounts;
 mod resource;
 mod service;
 
