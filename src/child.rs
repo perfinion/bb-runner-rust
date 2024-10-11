@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
 use std::time::Duration;
 
-use tracing::{debug, error, info, trace};
+use tracing::{error, info, trace};
 
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
@@ -17,6 +17,7 @@ use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::unistd::{self, Gid, Pid, Uid};
 
+use crate::mmaps::StackMap;
 use crate::mounts::{MntEntOpener, MntEntWrapper};
 use crate::resource::{ExitResources, ResourceUsage};
 
@@ -315,15 +316,16 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 }
 
 fn clone_pid1(clone_flags: CloneFlags, child_data: &mut ChildData) -> Result<Pid> {
-    const STACK_SIZE: usize = 1024 * 1024;
-    let stack: &mut [u8; STACK_SIZE] = &mut [0; STACK_SIZE];
+    const PAGE_SIZE: usize = 4 * 1024 * 1024;
+    let stack = StackMap::new(4 * PAGE_SIZE)?;
+    info!("Mapped Stack: {:#?}", stack);
 
     let sig = Some(Signal::SIGCHLD as i32);
 
     let child_pid = unsafe {
         sched::clone(
             Box::new(move || child_pid1(child_data).unwrap_or(-1)),
-            stack,
+            stack.as_slice(),
             clone_flags,
             sig,
         )
