@@ -316,8 +316,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 }
 
 fn clone_pid1(clone_flags: CloneFlags, child_data: &mut ChildData) -> Result<Pid> {
-    const PAGE_SIZE: usize = 4 * 1024 * 1024;
-    let stack = StackMap::new(4 * PAGE_SIZE)?;
+    let stack = StackMap::new(1024 * 1024)?; // 1 MB stacks
     info!("Stack: {:?}", stack);
 
     let sig = Some(Signal::SIGCHLD as i32);
