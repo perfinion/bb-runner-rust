@@ -1,5 +1,6 @@
+use std::convert::AsRef;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
@@ -13,10 +14,8 @@ use crate::resource::ExitResources;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn workdir_file(run: &RunRequest, wdname: &String) -> TonicResult<File> {
-    let wdpath: PathBuf = [&run.input_root_directory, &run.working_directory, &wdname]
-        .iter()
-        .collect();
+fn builddir_file<P: AsRef<Path>>(builddir: P, fname: &String) -> TonicResult<File> {
+    let wdpath = builddir.as_ref().join(fname);
 
     File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
 }
@@ -81,24 +80,20 @@ pub(crate) async fn wait_child(
     Err(Status::internal("Wait failed"))
 }
 
-#[tracing::instrument(skip(run))]
-pub(crate) fn spawn_child(processor: u32, run: &RunRequest) -> TonicResult<Child> {
-    let cwd: PathBuf = [&run.input_root_directory, &run.working_directory]
-        .iter()
-        .collect();
-
-    let arg0: PathBuf = [
-        &run.input_root_directory,
-        &run.working_directory,
-        &run.arguments[0],
-    ]
-    .iter()
-    .collect();
+#[tracing::instrument(skip(builddir, run))]
+pub(crate) fn spawn_child<P: AsRef<Path>>(
+    processor: u32,
+    builddir: P,
+    run: &RunRequest,
+) -> TonicResult<Child> {
+    let ird = builddir.as_ref().join(&run.input_root_directory);
+    let cwd = ird.join(&run.working_directory);
+    let arg0 = cwd.join(&run.arguments[0]);
 
     warn!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
 
-    let stdout_file = workdir_file(&run, &run.stdout_path)?;
-    let stderr_file = workdir_file(&run, &run.stderr_path)?;
+    let stdout_file = builddir_file(&builddir, &run.stdout_path)?;
+    let stderr_file = builddir_file(&builddir, &run.stderr_path)?;
 
     let mut command = std::process::Command::new(&arg0);
     command.args(&run.arguments[1..]);

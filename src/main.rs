@@ -55,10 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let path = Path::new("/tmp/tonic/helloworld");
-    let socket_stream: UnixListenerStream = bind_socket(path).unwrap_or_else(|error| {
-        panic!("Failed to create socket: {:?}", error);
-    });
+    let base_path = std::env::current_dir()?;
+    let sock_path = base_path.join("runner");
+
+    let socket_stream: UnixListenerStream =
+        bind_socket(sock_path.as_path()).unwrap_or_else(|error| {
+            panic!("Failed to create socket: {:?}", error);
+        });
 
     let nproc: u32 = match thread::available_parallelism() {
         Ok(p) => p.get() as u32,
@@ -66,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     warn!("Number of processors = {}", nproc);
 
-    let bb_runner = RunnerService::new(nproc);
+    let bb_runner = RunnerService::new(base_path, nproc);
     let svc = RunnerServer::new(bb_runner);
 
     let reflection_svc = tonic_reflection::server::Builder::configure()

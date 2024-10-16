@@ -1,6 +1,7 @@
 use prost_types::Any as PbAny;
 use std::collections::VecDeque;
-use std::path::Path;
+use std::convert::AsRef;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -24,6 +25,7 @@ struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);
 
 #[derive(Debug)]
 pub(crate) struct RunnerService {
+    builddir: PathBuf,
     processors: ProcessorQueue,
 }
 
@@ -47,9 +49,10 @@ impl ProcessorQueue {
 }
 
 impl RunnerService {
-    pub fn new(nproc: u32) -> RunnerService {
+    pub fn new<P: AsRef<Path>>(builddir: P, nproc: u32) -> RunnerService {
         let p: Vec<u32> = (0..nproc).collect();
         Self {
+            builddir: PathBuf::from(builddir.as_ref()).join("build"),
             processors: ProcessorQueue::new(p.into()),
         }
     }
@@ -57,7 +60,7 @@ impl RunnerService {
 
 #[tonic::async_trait]
 impl Runner for RunnerService {
-    #[tracing::instrument]
+    #[tracing::instrument(skip_all)]
     async fn check_readiness(
         &self,
         request: tonic::Request<CheckReadinessRequest>,
@@ -66,7 +69,7 @@ impl Runner for RunnerService {
 
         debug!("CheckReadiness = {:?}", request);
 
-        if Path::new(&readyreq.path).exists() {
+        if self.builddir.join(&readyreq.path).exists() {
             info!("CheckReadiness.path exists = {:?}", readyreq.path);
             return Ok(tonic::Response::new(()));
         }
@@ -97,10 +100,11 @@ impl Runner for RunnerService {
         let token = CancellationToken::new();
         let _cancel_guard = token.clone().drop_guard();
         let procque = self.processors.clone();
+        let builddir = self.builddir.clone();
 
         let childtask: JoinHandle<TonicResult<ExitResources>> = tokio::spawn(async move {
             let processor = procque.take_cpu().await?;
-            let mut child = spawn_child(processor, &run)?;
+            let mut child = spawn_child(processor, builddir, &run)?;
             let pid = child.id();
             debug!("Started process: {} job {}", pid, processor);
 
