@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::Result as TonicResult;
 use tonic::Status;
-use tracing::{self, debug, info};
+use tracing::{self, debug, info, trace};
 
 #[cfg(unix)]
 use tonic::transport::server::UdsConnectInfo;
@@ -67,10 +67,10 @@ impl Runner for RunnerService {
     ) -> TonicResult<tonic::Response<()>> {
         let readyreq = request.get_ref();
 
-        debug!("CheckReadiness = {:?}", request);
+        trace!("CheckReadiness = {:?}", request);
 
         if self.builddir.join(&readyreq.path).exists() {
-            info!("CheckReadiness.path exists = {:?}", readyreq.path);
+            trace!("CheckReadiness.path exists = {:?}", readyreq.path);
             return Ok(tonic::Response::new(()));
         }
 
