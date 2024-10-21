@@ -1,7 +1,8 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
+use std::env;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use tonic::transport::Server;
 use tracing::{self, warn};
@@ -55,7 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let base_path = std::env::current_dir()?;
+    let base_path: PathBuf = match env::var("BBRUNNER_BASE_PATH") {
+        Ok(val) => PathBuf::from(val),
+        Err(_) => std::env::current_dir()?,
+    };
     let sock_path = base_path.join("runner");
 
     let socket_stream: UnixListenerStream =
