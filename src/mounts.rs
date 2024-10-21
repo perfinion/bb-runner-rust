@@ -8,6 +8,7 @@ use nix::mount::MsFlags;
 
 pub(crate) struct MntEntOpener(*mut FILE);
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct MntEntWrapper {
     pub mnt_fsname: String, // name of mounted filesystem
