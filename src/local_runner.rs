@@ -1,5 +1,5 @@
 use std::convert::AsRef;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::signal::unix::{signal, SignalKind};
@@ -89,6 +89,13 @@ pub(crate) fn spawn_child<P: AsRef<Path>>(
     let ird = builddir.as_ref().join(&run.input_root_directory);
     let cwd = ird.join(&run.working_directory);
     let arg0 = cwd.join(&run.arguments[0]);
+    let tmpdir = builddir.as_ref().join(&run.temporary_directory).join("tmp");
+    let homedir = builddir
+        .as_ref()
+        .join(&run.temporary_directory)
+        .join("home");
+    fs::create_dir(&tmpdir).map_err(|_| Status::internal("Failed to create tmpdir"))?;
+    fs::create_dir(&homedir).map_err(|_| Status::internal("Failed to create homedir"))?;
 
     warn!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
 
@@ -100,6 +107,8 @@ pub(crate) fn spawn_child<P: AsRef<Path>>(
     command.current_dir(&cwd);
     command.env_clear();
     command.envs(&run.environment_variables);
+    command.env("TMP", &tmpdir);
+    command.env("HOME", &homedir);
     command.stdin(Stdio::null());
     command.stdout(Stdio::inherit());
     command.stderr(Stdio::inherit());
