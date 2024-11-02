@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
@@ -10,11 +10,12 @@ use tracing::{error, info, trace};
 
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
-use nix::libc::{self, c_uint, pid_t, timeval};
+use nix::libc::{self, c_uint, pid_t, timeval, ifreq};
 use nix::mount::{self, MsFlags};
 use nix::sched::{self, CloneFlags};
 use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
+use nix::sys::socket::{self, AddressFamily, SockFlag, SockType, SockProtocol};
 use nix::unistd::{self, Gid, Pid, Uid};
 
 use crate::mmaps::StackMap;
@@ -249,6 +250,27 @@ fn remount_all_readonly() -> Result<()> {
     Ok(())
 }
 
+fn net_loopback_up() -> Result<()> {
+    let sock: OwnedFd = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC,
+        None::<SockProtocol>,
+    )?;
+
+    let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+    for (dst, src) in ifr.ifr_name.iter_mut().zip(b"lo\0".iter()) {
+        *dst = *src as _;
+    }
+
+    unsafe {
+        ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16;
+        libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS, &ifr);
+    };
+
+    Ok(())
+}
+
 fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     let pid = Pid::this();
     nix::unistd::setpgid(pid, pid)?;
@@ -287,6 +309,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     )?;
 
     remount_all_readonly()?;
+    net_loopback_up()?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 
