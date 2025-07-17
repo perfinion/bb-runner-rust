@@ -5,7 +5,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::thread;
 use tonic::transport::Server;
-use tracing::{self, warn};
+use tracing::{self, error, warn};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 #[cfg(unix)]
@@ -17,6 +17,7 @@ use crate::proto::runner::runner_server::RunnerServer;
 use crate::service::RunnerService;
 
 mod child;
+mod config;
 mod local_runner;
 mod mmaps;
 mod mounts;
@@ -55,6 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_default_directive(LevelFilter::DEBUG.into())
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    let argv: Vec<_> = env::args().collect();
+    if  argv.len() < 2 {
+        error!("Missing config file!");
+        error!("Usage: %s bb-runner-rust.jsonnet");
+    }
+
+    let _config = config::Configuration::new(&argv[1]);
 
     let base_path: PathBuf = match env::var("BBRUNNER_BASE_PATH") {
         Ok(val) => PathBuf::from(val),
