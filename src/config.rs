@@ -2,18 +2,20 @@ use std::convert::AsRef;
 use std::env;
 use std::path::{Path, PathBuf};
 //use std::sync::Arc;
-use tracing::{self, warn};
+use tracing::{self, info, warn};
+use rsjsonnet_front::Session;
 use rsjsonnet_lang::arena::Arena;
 use rsjsonnet_lang::program::Value;
-use rsjsonnet_front::Session;
 use serde::{Deserialize, Serialize};
-use serde_json::Result;
+// use serde_json::Result;
+use std::thread;
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Configuration {
-    build_directory_path: PathBuf,
-    grpc_listen_path: String,
-    num_cpus: u32,
+    pub build_directory_path: PathBuf,
+    pub grpc_listen_path: PathBuf,
+    pub num_cpus: u32,
 }
 
 fn add_var(session: &mut Session, name: &str, val: &str) -> Option<()> {
@@ -54,12 +56,18 @@ impl Configuration {
 
         warn!("Config json: {:?}", json_result);
 
+        let mut config: Configuration =
+            serde_json::from_str::<Configuration>(&json_result).ok()?;
 
-        Some(Self {
-            // builddir: PathBuf::from(builddir.as_ref()).join("build"),
-            build_directory_path: PathBuf::from("/build/"),
-            grpc_listen_path: "".to_string(),
-            num_cpus: 32,
-        })
+        if config.num_cpus == 0 {
+            config.num_cpus = match thread::available_parallelism() {
+                Ok(p) => p.get() as u32,
+                _ => 1,
+            };
+            info!("Number of processors = {}", config.num_cpus);
+        }
+
+        warn!("Config obj: {:?}", config);
+        Some(config)
     }
 }

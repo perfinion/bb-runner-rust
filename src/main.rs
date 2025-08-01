@@ -1,9 +1,9 @@
 #![cfg_attr(not(unix), allow(unused_imports))]
 
 use std::env;
+use std::io::Error;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
-use std::thread;
+use std::path::Path;
 use tonic::transport::Server;
 use tracing::{self, error, warn};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
@@ -36,12 +36,15 @@ pub(crate) mod proto {
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Error>> {
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    std::fs::remove_file(path).unwrap_or_else(|error| {
-        if error.kind() != ErrorKind::NotFound {
-            panic!("Failed to remove socket: {:?}", error);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if let Some(e) = std::fs::remove_file(path).err() {
+        if e.kind() != ErrorKind::NotFound {
+            return Err(Box::new(e));
         }
-    });
+    }
 
     let socket = UnixListener::bind(path)?;
     Ok(UnixListenerStream::new(socket))
@@ -58,31 +61,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let argv: Vec<_> = env::args().collect();
-    if  argv.len() < 2 {
+    if argv.len() < 2 {
         error!("Missing config file!");
         error!("Usage: %s bb-runner-rust.jsonnet");
+        return Err(Error::new(ErrorKind::InvalidFilename, "Missing config file!").into());
     }
 
-    let _config = config::Configuration::new(&argv[1]);
-
-    let base_path: PathBuf = match env::var("BBRUNNER_BASE_PATH") {
-        Ok(val) => PathBuf::from(val),
-        Err(_) => std::env::current_dir()?,
+    let Some(config) = config::Configuration::new(&argv[1]) else {
+        error!("Failed to parse configuration");
+        return Err(Error::new(ErrorKind::InvalidFilename, "Failed to parse configuration!").into());
     };
-    let sock_path = base_path.join("runner");
 
-    let socket_stream: UnixListenerStream =
-        bind_socket(sock_path.as_path()).unwrap_or_else(|error| {
-            panic!("Failed to create socket: {:?}", error);
-        });
+    let socket_stream = bind_socket(config.grpc_listen_path.as_ref())?;
 
-    let nproc: u32 = match thread::available_parallelism() {
-        Ok(p) => p.get() as u32,
-        _ => 8,
-    };
-    warn!("Number of processors = {}", nproc);
-
-    let bb_runner = RunnerService::new(base_path, nproc);
+    let bb_runner = RunnerService::new(config);
     let svc = RunnerServer::new(bb_runner);
 
     let reflection_svc = tonic_reflection::server::Builder::configure()
