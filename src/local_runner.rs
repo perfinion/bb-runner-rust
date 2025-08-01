@@ -9,16 +9,19 @@ use tonic::Status;
 use tracing::{self, debug, error, info, warn};
 
 use crate::child::{Child, Command, Wait4};
+use crate::config::Configuration;
 use crate::proto::runner::RunRequest;
 use crate::resource::ExitResources;
-use crate::config::Configuration;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn builddir_file<P: AsRef<Path>>(builddir: P, fname: &String) -> TonicResult<File> {
     let wdpath = builddir.as_ref().join(fname);
 
-    File::create(wdpath).or(Err(Status::internal("Failed to create stdout")))
+    File::create(&wdpath).or(Err(Status::internal(format!(
+        "Failed to create file: {:?}",
+        &wdpath
+    ))))
 }
 
 /// SIGCHILD signal handlers are global for the whole process, you can't register a handler
@@ -54,9 +57,8 @@ pub(crate) async fn wait_child(
                 // The token was cancelled, send SIGKILL to start cleanup
                 // Only need to kill the direct child, it is pid1 in the PID namespace which forces
                 // cleanup of all processes in the namespace.
-                match child.kill() {
-                    Ok(_) => kill_sent = true,
-                    _ => {},
+                if child.kill().is_ok() {
+                    kill_sent = true;
                 }
             }
         };
@@ -93,16 +95,14 @@ pub(crate) fn spawn_child(
     let cwd = ird.join(&run.working_directory);
     let arg0 = cwd.join(&run.arguments[0]);
     let tmpdir = builddir.join(&run.temporary_directory).join("tmp");
-    let homedir = builddir
-        .join(&run.temporary_directory)
-        .join("home");
+    let homedir = builddir.join(&run.temporary_directory).join("home");
     fs::create_dir(&tmpdir).map_err(|_| Status::internal("Failed to create tmpdir"))?;
     fs::create_dir(&homedir).map_err(|_| Status::internal("Failed to create homedir"))?;
 
     warn!("Running cmd: {:?} {:?}", arg0, &run.arguments[1..]);
 
-    let stdout_file = builddir_file(&builddir, &run.stdout_path)?;
-    let stderr_file = builddir_file(&builddir, &run.stderr_path)?;
+    let stdout_file = builddir_file(builddir, &run.stdout_path)?;
+    let stderr_file = builddir_file(builddir, &run.stderr_path)?;
 
     let mut command = std::process::Command::new(&arg0);
     command.args(&run.arguments[1..]);

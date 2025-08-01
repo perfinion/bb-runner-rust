@@ -10,12 +10,12 @@ use tracing::{error, info, trace};
 
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
-use nix::libc::{self, c_uint, pid_t, timeval, ifreq};
+use nix::libc::{self, c_uint, ifreq, pid_t, timeval};
 use nix::mount::{self, MsFlags};
 use nix::sched::{self, CloneFlags};
 use nix::sys::prctl;
 use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
-use nix::sys::socket::{self, AddressFamily, SockFlag, SockType, SockProtocol};
+use nix::sys::socket::{self, AddressFamily, SockFlag, SockProtocol, SockType};
 use nix::unistd::{self, Gid, Pid, Uid};
 
 use crate::mmaps::StackMap;
@@ -228,13 +228,13 @@ fn close_range_fds(first: c_uint) -> Result<()> {
     }
 }
 
-fn remount_all_readonly(rw_paths: &Vec<String>) -> Result<()> {
+fn remount_all_readonly(rw_paths: &[String]) -> Result<()> {
     let mntent = MntEntOpener::new(Path::new("/proc/self/mounts"))?;
 
     let entries: Vec<MntEntWrapper> = mntent.list_all()?;
     for ent in entries {
         trace!("Mount Entry = {} = {:?}", ent.mnt_dir, ent);
-        if rw_paths.into_iter().find(|&x| ent.mnt_dir.starts_with(x)).is_some() {
+        if rw_paths.iter().any(|x| ent.mnt_dir.starts_with(x)) {
             trace!("Leaving ReadWrite Entry = {} = {:?}", ent.mnt_dir, ent);
             continue;
         }
@@ -326,7 +326,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         None::<&'static str>,
     )?;
 
-    remount_all_readonly(&child_data.rw_paths)?;
+    remount_all_readonly(child_data.rw_paths)?;
     net_loopback_up()?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());

@@ -60,7 +60,7 @@ impl Drop for MntEntOpener {
     fn drop(&mut self) {
         match unsafe { libc::endmntent(self.0) } {
             1 => (),
-            ret @ _ => panic!("endmntent returned {}, expected 1", ret),
+            ret => panic!("endmntent returned {}, expected 1", ret),
         }
     }
 }

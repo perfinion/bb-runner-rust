@@ -69,7 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let Some(config) = config::Configuration::new(&argv[1]) else {
         error!("Failed to parse configuration");
-        return Err(Error::new(ErrorKind::InvalidFilename, "Failed to parse configuration!").into());
+        return Err(
+            Error::new(ErrorKind::InvalidFilename, "Failed to parse configuration!").into(),
+        );
     };
 
     let socket_stream = bind_socket(config.grpc_listen_path.as_ref())?;

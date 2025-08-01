@@ -15,9 +15,9 @@ use crate::proto::resourceusage::PosixResourceUsage;
 use crate::proto::runner::runner_server::Runner;
 use crate::proto::runner::{CheckReadinessRequest, RunRequest, RunResponse};
 
+use crate::config::Configuration;
 use crate::local_runner::{spawn_child, wait_child};
 use crate::resource::ExitResources;
-use crate::config::Configuration;
 
 #[derive(Clone, Debug)]
 struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);
@@ -51,10 +51,9 @@ impl RunnerService {
     pub fn new(config: Configuration) -> RunnerService {
         let p: Vec<u32> = (0..config.num_cpus).collect();
         Self {
-            config: config,
+            config,
             // builddir: PathBuf::from(builddir.as_ref()).join("build"),
             processors: ProcessorQueue::new(p.into()),
-
         }
     }
 }
@@ -70,7 +69,12 @@ impl Runner for RunnerService {
 
         trace!("CheckReadiness = {:?}", request);
 
-        if self.config.build_directory_path.join(&readyreq.path).exists() {
+        if self
+            .config
+            .build_directory_path
+            .join(&readyreq.path)
+            .exists()
+        {
             trace!("CheckReadiness.path exists = {:?}", readyreq.path);
             return Ok(tonic::Response::new(()));
         }

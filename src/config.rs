@@ -2,11 +2,11 @@ use std::convert::AsRef;
 use std::env;
 use std::path::{Path, PathBuf};
 //use std::sync::Arc;
-use tracing::{self, info, warn};
 use rsjsonnet_front::Session;
 use rsjsonnet_lang::arena::Arena;
 use rsjsonnet_lang::program::Value;
 use serde::{Deserialize, Serialize};
+use tracing::{self, info, warn};
 // use serde_json::Result;
 use std::thread;
 
@@ -58,8 +58,7 @@ impl Configuration {
 
         warn!("Config json: {:?}", json_result);
 
-        let mut config: Configuration =
-            serde_json::from_str::<Configuration>(&json_result).ok()?;
+        let mut config: Configuration = serde_json::from_str::<Configuration>(&json_result).ok()?;
 
         if config.num_cpus == 0 {
             config.num_cpus = match thread::available_parallelism() {

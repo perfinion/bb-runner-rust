@@ -31,18 +31,18 @@ pub(crate) struct ExitResources {
     pub rusage: ResourceUsage,
 }
 
-impl Into<PosixResourceUsage> for ResourceUsage {
-    fn into(self) -> PosixResourceUsage {
+impl From<ResourceUsage> for PosixResourceUsage {
+    fn from(val: ResourceUsage) -> Self {
         let mut pbres = PosixResourceUsage::default();
-        if let Ok(n) = prost_types::Duration::try_from(self.utime) {
+        if let Ok(n) = prost_types::Duration::try_from(val.utime) {
             pbres.user_time = Some(n);
         }
 
-        if let Ok(n) = prost_types::Duration::try_from(self.stime) {
+        if let Ok(n) = prost_types::Duration::try_from(val.stime) {
             pbres.system_time = Some(n);
         }
 
-        if let Ok(n) = i64::try_from(self.maxrss) {
+        if let Ok(n) = i64::try_from(val.maxrss) {
             pbres.maximum_resident_set_size = n;
         }
 

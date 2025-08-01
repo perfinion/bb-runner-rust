@@ -59,9 +59,9 @@ impl<'a> StackMap {
         }?;
 
         Ok(Self {
-            stack_size: stack_size,
-            mmap_size: mmap_size,
-            mmap_base: mmap_base,
+            stack_size,
+            mmap_size,
+            mmap_base,
         })
     }
 
