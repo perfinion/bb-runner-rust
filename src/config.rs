@@ -16,6 +16,7 @@ pub(crate) struct Configuration {
     pub build_directory_path: PathBuf,
     pub grpc_listen_path: PathBuf,
     pub num_cpus: u32,
+    pub memory_max: u32,
 }
 
 fn add_var(session: &mut Session, name: &str, val: &str) -> Option<()> {

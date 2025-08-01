@@ -83,6 +83,7 @@ pub(crate) async fn wait_child(
 #[tracing::instrument(skip(builddir, run))]
 pub(crate) fn spawn_child<P: AsRef<Path>>(
     processor: u32,
+    memory_max: u32,
     builddir: P,
     run: &RunRequest,
 ) -> TonicResult<Child> {
@@ -119,6 +120,7 @@ pub(crate) fn spawn_child<P: AsRef<Path>>(
         .stderr(stderr_file)
         .hostname("localhost")
         .cgroup(cgname.as_str())
+        .memory_max(memory_max)
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
 }
