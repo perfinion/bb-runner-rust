@@ -10,13 +10,14 @@ use serde::{Deserialize, Serialize};
 // use serde_json::Result;
 use std::thread;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Configuration {
     pub build_directory_path: PathBuf,
     pub grpc_listen_path: PathBuf,
     pub num_cpus: u32,
     pub memory_max: u32,
+    pub rw_paths: Vec<String>,
 }
 
 fn add_var(session: &mut Session, name: &str, val: &str) -> Option<()> {

@@ -11,6 +11,7 @@ use tracing::{self, debug, error, info, warn};
 use crate::child::{Child, Command, Wait4};
 use crate::proto::runner::RunRequest;
 use crate::resource::ExitResources;
+use crate::config::Configuration;
 
 const WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -80,19 +81,19 @@ pub(crate) async fn wait_child(
     Err(Status::internal("Wait failed"))
 }
 
-#[tracing::instrument(skip(builddir, run))]
-pub(crate) fn spawn_child<P: AsRef<Path>>(
+#[tracing::instrument(skip(run))]
+pub(crate) fn spawn_child(
     processor: u32,
-    memory_max: u32,
-    builddir: P,
+    child_cfg: &Configuration,
     run: &RunRequest,
 ) -> TonicResult<Child> {
-    let ird = builddir.as_ref().join(&run.input_root_directory);
+    let builddir: &Path = child_cfg.build_directory_path.as_ref();
+
+    let ird = builddir.join(&run.input_root_directory);
     let cwd = ird.join(&run.working_directory);
     let arg0 = cwd.join(&run.arguments[0]);
-    let tmpdir = builddir.as_ref().join(&run.temporary_directory).join("tmp");
+    let tmpdir = builddir.join(&run.temporary_directory).join("tmp");
     let homedir = builddir
-        .as_ref()
         .join(&run.temporary_directory)
         .join("home");
     fs::create_dir(&tmpdir).map_err(|_| Status::internal("Failed to create tmpdir"))?;
@@ -120,7 +121,8 @@ pub(crate) fn spawn_child<P: AsRef<Path>>(
         .stderr(stderr_file)
         .hostname("localhost")
         .cgroup(cgname.as_str())
-        .memory_max(memory_max)
+        .memory_max(child_cfg.memory_max)
+        .rw_paths(&child_cfg.rw_paths)
         .spawn()
         .map_err(|_| Status::internal("Failed to spawn child"))
 }

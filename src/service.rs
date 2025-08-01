@@ -101,12 +101,11 @@ impl Runner for RunnerService {
         let token = CancellationToken::new();
         let _cancel_guard = token.clone().drop_guard();
         let procque = self.processors.clone();
-        let builddir = self.config.build_directory_path.clone();
-        let mem_max = self.config.memory_max;
+        let child_cfg = self.config.clone();
 
         let childtask: JoinHandle<TonicResult<ExitResources>> = tokio::spawn(async move {
             let processor = procque.take_cpu().await?;
-            let mut child = spawn_child(processor, mem_max, builddir, &run)?;
+            let mut child = spawn_child(processor, &child_cfg, &run)?;
             let pid = child.id();
             debug!("Started process: {} job {}", pid, processor);
 

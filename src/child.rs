@@ -51,6 +51,7 @@ pub(crate) struct Command {
     cgroup: Option<String>,
     mem_max: Option<u32>,
     namespaces: CloneFlags,
+    rw_paths: Vec<String>,
 }
 
 struct ChildData<'a> {
@@ -59,6 +60,7 @@ struct ChildData<'a> {
     stdout: Option<RawFd>,
     stderr: Option<RawFd>,
     hostname: Option<&'a str>,
+    rw_paths: &'a Vec<String>,
 }
 
 impl std::convert::From<process::Command> for Command {
@@ -75,6 +77,7 @@ impl std::convert::From<process::Command> for Command {
                 | CloneFlags::CLONE_NEWNET
                 | CloneFlags::CLONE_NEWNS
                 | CloneFlags::CLONE_NEWUSER,
+            rw_paths: vec![],
         }
     }
 }
@@ -89,6 +92,7 @@ impl Command {
             stdout: self.stdout.as_ref().map(|s| s.as_raw_fd()),
             stderr: self.stderr.as_ref().map(|s| s.as_raw_fd()),
             hostname: self.hostname.as_ref().map(String::as_ref),
+            rw_paths: self.rw_paths.as_ref(),
         };
 
         let pid = clone_pid1(self.namespaces, &mut child_data)?;
@@ -129,6 +133,11 @@ impl Command {
     pub fn hostname(&mut self, hostname: &str) -> &mut Command {
         self.hostname = Some(hostname.to_string());
         self.namespaces |= CloneFlags::CLONE_NEWUTS;
+        self
+    }
+
+    pub fn rw_paths(&mut self, paths: &[String]) -> &mut Command {
+        self.rw_paths.extend_from_slice(paths);
         self
     }
 }
@@ -219,13 +228,14 @@ fn close_range_fds(first: c_uint) -> Result<()> {
     }
 }
 
-fn remount_all_readonly() -> Result<()> {
+fn remount_all_readonly(rw_paths: &Vec<String>) -> Result<()> {
     let mntent = MntEntOpener::new(Path::new("/proc/self/mounts"))?;
 
     let entries: Vec<MntEntWrapper> = mntent.list_all()?;
     for ent in entries {
         trace!("Mount Entry = {} = {:?}", ent.mnt_dir, ent);
-        if ent.mnt_dir.starts_with("/dev") {
+        if rw_paths.into_iter().find(|&x| ent.mnt_dir.starts_with(x)).is_some() {
+            trace!("Leaving ReadWrite Entry = {} = {:?}", ent.mnt_dir, ent);
             continue;
         }
 
@@ -316,7 +326,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         None::<&'static str>,
     )?;
 
-    remount_all_readonly()?;
+    remount_all_readonly(&child_data.rw_paths)?;
     net_loopback_up()?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
