@@ -104,7 +104,7 @@ impl Command {
             move_child_cgroup(pid, cg, self.mem_max)?;
         }
 
-        unistd::write(write_pipe, "A".as_bytes())?;
+        unistd::write(write_pipe, b"A")?;
 
         Ok(Child { pid })
     }
@@ -119,8 +119,8 @@ impl Command {
         self
     }
 
-    pub fn cgroup(&mut self, cg: &str) -> &mut Command {
-        self.cgroup = Some(cg.to_string());
+    pub fn cgroup<S: Into<String>>(&mut self, cg: S) -> &mut Command {
+        self.cgroup = Some(cg.into());
         self.namespaces |= CloneFlags::CLONE_NEWCGROUP;
         self
     }
@@ -142,19 +142,21 @@ impl Command {
     }
 }
 
+fn write_existing_file<P: AsRef<Path>, S: AsRef<str>>(path: P, contents: S) -> Result<()> {
+    OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(contents.as_ref().as_bytes()))
+}
+
 fn write_uid_map(pid: Pid, outer_uid: Uid) -> Result<()> {
-    let uid_map_path = format!("/proc/{pid}/uid_map");
-    let buf = format!("0 {outer_uid} 1");
-    File::create(uid_map_path).and_then(|mut f| f.write_all(buf.as_bytes()))
+    write_existing_file(format!("/proc/{pid}/uid_map"), format!("0 {outer_uid} 1"))
 }
 
 fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
-    let setgroups_path = format!("/proc/{pid}/setgroups");
-    File::create(setgroups_path).and_then(|mut f| f.write_all(b"deny"))?;
-
-    let gid_map_path = format!("/proc/{pid}/gid_map");
-    let buf = format!("0 {outer_gid} 1");
-    File::create(gid_map_path).and_then(|mut f| f.write_all(buf.as_bytes()))
+    write_existing_file(format!("/proc/{pid}/setgroups"), "deny")?;
+    write_existing_file(format!("/proc/{pid}/gid_map"), format!("0 {outer_gid} 1"))
 }
 
 #[tracing::instrument(ret)]
@@ -170,24 +172,10 @@ fn move_child_cgroup(pid: Pid, jobcpu: &str, mem_max: Option<u32>) -> Result<()>
         .open(cgroup_dir.join("cgroup.procs"))
         .and_then(|mut f| f.write_all(pid.to_string().as_bytes()))?;
 
-    OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(cgroup_dir.join("cpuset.cpus"))
-        .and_then(|mut f| f.write_all(jobcpu.as_bytes()))?;
-
-    OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(cgroup_dir.join("memory.swap.max"))
-        .and_then(|mut f| f.write_all(b"0"))?;
-
+    write_existing_file(cgroup_dir.join("cpuset.cpus"), jobcpu)?;
+    write_existing_file(cgroup_dir.join("memory.swap.max"), "0")?;
     if let Some(m) = mem_max {
-        OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(cgroup_dir.join("memory.max"))
-            .and_then(|mut f| f.write_all(m.to_string().as_bytes()))?;
+        write_existing_file(cgroup_dir.join("memory.max"), m.to_string())?;
     }
 
     Ok(())

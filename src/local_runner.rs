@@ -115,12 +115,11 @@ pub(crate) fn spawn_child(
     command.stdout(Stdio::inherit());
     command.stderr(Stdio::inherit());
 
-    let cgname = format!("{processor}");
     Command::from(command)
         .stdout(stdout_file)
         .stderr(stderr_file)
         .hostname("localhost")
-        .cgroup(cgname.as_str())
+        .cgroup(processor.to_string())
         .memory_max(child_cfg.memory_max)
         .rw_paths(&child_cfg.rw_paths)
         .spawn()

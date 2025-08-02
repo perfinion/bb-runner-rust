@@ -61,10 +61,7 @@ impl Configuration {
         let mut config: Configuration = serde_json::from_str::<Configuration>(&json_result).ok()?;
 
         if config.num_cpus == 0 {
-            config.num_cpus = match thread::available_parallelism() {
-                Ok(p) => p.get() as u32,
-                _ => 1,
-            };
+            config.num_cpus = thread::available_parallelism().map_or(1, |p| p.get() as u32);
             info!("Number of processors = {}", config.num_cpus);
         }
 
