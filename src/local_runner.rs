@@ -104,24 +104,36 @@ pub(crate) fn spawn_child(
     let stdout_file = builddir_file(builddir, &run.stdout_path)?;
     let stderr_file = builddir_file(builddir, &run.stderr_path)?;
 
-    let mut command = std::process::Command::new(&arg0);
-    command.args(&run.arguments[1..]);
-    command.current_dir(&cwd);
-    command.env_clear();
-    command.envs(&run.environment_variables);
-    command.env("TMP", &tmpdir);
-    command.env("HOME", &homedir);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::inherit());
-    command.stderr(Stdio::inherit());
+    let mut stdcmd = std::process::Command::new(&arg0);
+    stdcmd.args(&run.arguments[1..]);
+    stdcmd.current_dir(&cwd);
+    stdcmd.env_clear();
+    stdcmd.envs(&run.environment_variables);
+    stdcmd.env("TMP", &tmpdir);
+    stdcmd.env("HOME", &homedir);
+    stdcmd.stdin(Stdio::null());
+    stdcmd.stdout(Stdio::inherit());
+    stdcmd.stderr(Stdio::inherit());
 
-    Command::from(command)
-        .stdout(stdout_file)
-        .stderr(stderr_file)
-        .hostname("localhost")
-        .cgroup(processor.to_string())
-        .memory_max(child_cfg.memory_max)
-        .rw_paths(&child_cfg.rw_paths)
-        .spawn()
-        .map_err(|_| Status::internal("Failed to spawn child"))
+    let mut c = Command::from(stdcmd);
+    c.stdout(stdout_file);
+    c.stderr(stderr_file);
+    c.hostname("localhost");
+    c.cgroup(processor.to_string());
+    c.memory_max(child_cfg.memory_max);
+    c.rw_paths(&child_cfg.rw_paths);
+
+    if let Some(p) = homedir.to_str() {
+        c.rw_path(p);
+    }
+
+    if let Some(p) = ird.to_str() {
+        c.rw_path(p);
+    }
+
+    if let Some(p) = tmpdir.to_str() {
+        c.rw_path(p);
+    }
+
+    c.spawn().map_err(|_| Status::internal("Failed to spawn child"))
 }

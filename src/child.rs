@@ -77,7 +77,7 @@ impl std::convert::From<process::Command> for Command {
                 | CloneFlags::CLONE_NEWNET
                 | CloneFlags::CLONE_NEWNS
                 | CloneFlags::CLONE_NEWUSER,
-            rw_paths: vec![],
+            rw_paths: Vec::new(),
         }
     }
 }
@@ -133,6 +133,11 @@ impl Command {
     pub fn hostname(&mut self, hostname: &str) -> &mut Command {
         self.hostname = Some(hostname.to_string());
         self.namespaces |= CloneFlags::CLONE_NEWUTS;
+        self
+    }
+
+    pub fn rw_path<S: Into<String>>(&mut self, path: S) -> &mut Command {
+        self.rw_paths.push(path.into());
         self
     }
 
