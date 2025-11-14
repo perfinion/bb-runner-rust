@@ -63,6 +63,12 @@ struct ChildData<'a> {
     rw_paths: &'a Vec<String>,
 }
 
+#[derive(Debug, PartialEq)]
+enum CgroupVersion {
+    V1,
+    V2,
+}
+
 impl std::convert::From<process::Command> for Command {
     fn from(source: process::Command) -> Self {
         Self {
@@ -164,23 +170,84 @@ fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
     write_existing_file(format!("/proc/{pid}/gid_map"), format!("0 {outer_gid} 1"))
 }
 
+fn detect_cgroup_version() -> Result<CgroupVersion> {
+    // Check if cgroup v2 is mounted at /sys/fs/cgroup
+    // cgroup v2 has a unified hierarchy with cgroup.controllers
+    if Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+        Ok(CgroupVersion::V2)
+    } else {
+        Ok(CgroupVersion::V1)
+    }
+}
+
 #[tracing::instrument(ret)]
 fn move_child_cgroup(pid: Pid, jobcpu: &str, mem_max: Option<u32>) -> Result<()> {
+    let version = detect_cgroup_version()?;
+
+    match version {
+        CgroupVersion::V2 => move_child_cgroup_v2(pid, jobcpu, mem_max),
+        CgroupVersion::V1 => move_child_cgroup_v1(pid, jobcpu, mem_max),
+    }
+}
+
+fn move_child_cgroup_v2(pid: Pid, jobcpu: &str, mem_max: Option<u32>) -> Result<()> {
     let cgroup_root = Path::new("/sys/fs/cgroup/bb_runner");
     let cgroup_dir: PathBuf = cgroup_root.join(format!("job{jobcpu}"));
     if !cgroup_dir.exists() {
         std::fs::create_dir(&cgroup_dir)?;
     }
 
-    OpenOptions::new()
-        .append(true)
-        .open(cgroup_dir.join("cgroup.procs"))
-        .and_then(|mut f| f.write_all(pid.to_string().as_bytes()))?;
-
+    write_existing_file(cgroup_dir.join("cgroup.procs"), pid.to_string())?;
     write_existing_file(cgroup_dir.join("cpuset.cpus"), jobcpu)?;
     write_existing_file(cgroup_dir.join("memory.swap.max"), "0")?;
+    write_existing_file(cgroup_dir.join("memory.oom.group"), "1")?;
+    write_existing_file(cgroup_dir.join("memory.peak"), "0")?;
     if let Some(m) = mem_max {
         write_existing_file(cgroup_dir.join("memory.max"), m.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<u32>) -> Result<()> {
+    // Cgroup v1 has many separate hierarchies
+    let memory_cgroup_root = Path::new("/sys/fs/cgroup/memory/bb_runner");
+    let cpu_cgroup_root = Path::new("/sys/fs/cgroup/cpu,cpuacct/bb_runner");
+    let cpuset_cgroup_root = Path::new("/sys/fs/cgroup/cpuset/bb_runner");
+
+    let job_name = format!("job{jobcpu}");
+
+    // Create cgroup directories in each hierarchy
+    let memory_cgroup_dir = memory_cgroup_root.join(&job_name);
+    let cpu_cgroup_dir = cpu_cgroup_root.join(&job_name);
+    let cpuset_cgroup_dir = cpuset_cgroup_root.join(&job_name);
+
+    if !memory_cgroup_dir.exists() {
+        std::fs::create_dir_all(&memory_cgroup_dir)?;
+    }
+    if !cpu_cgroup_dir.exists() {
+        std::fs::create_dir_all(&cpu_cgroup_dir)?;
+    }
+    if !cpuset_cgroup_dir.exists() {
+        std::fs::create_dir_all(&cpuset_cgroup_dir)?;
+    }
+
+    // Add process to each cgroup
+    write_existing_file(memory_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+    write_existing_file(cpu_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+    write_existing_file(cpuset_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+
+    write_existing_file(cpuset_cgroup_dir.join("cpuset.cpus"), jobcpu)?;
+    write_existing_file(memory_cgroup_dir.join("memory.swappiness"), "0")?;
+    if let Some(m) = mem_max {
+        write_existing_file(
+            memory_cgroup_dir.join("memory.limit_in_bytes"),
+            m.to_string(),
+        )?;
+        write_existing_file(
+            memory_cgroup_dir.join("memory.memsw.limit_in_bytes"),
+            m.to_string(),
+        )?;
     }
 
     Ok(())
