@@ -1,0 +1,78 @@
+name: Build
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+  CLICOLOR: 1
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install protobuf
+      run: |
+        sudo apt-get update
+        sudo apt-get install protobuf-compiler gcc-aarch64-linux-gnu
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+    - name: Build x86_64-unknown-linux-gnu release
+      run: |
+        cargo build --target=x86_64-unknown-linux-gnu --release
+
+    - name: Build x86_64-unknown-linux-gnu debug
+      run: |
+        cargo build --target=x86_64-unknown-linux-gnu
+
+    - name: Build aarch64-unknown-linux-gnu release
+      run: |
+        cargo build --target=aarch64-unknown-linux-gnu --release
+
+    - name: Build aarch64-unknown-linux-gnu debug
+      run: |
+        cargo build --target=aarch64-unknown-linux-gnu
+
+    - name: Upload x86_64-unknown-linux-gnu release
+      uses: actions/upload-artifact@v4
+      with:
+        name: bb_runner-x86_64
+        path: target/x86_64-unknown-linux-gnu/release/bb_runner
+
+    - name: Upload x86_64-unknown-linux-gnu debug
+      uses: actions/upload-artifact@v4
+      with:
+        name: bb_runner-x86_64-dbg
+        path: target/x86_64-unknown-linux-gnu/debug/bb_runner
+
+    - name: Upload aarch64-unknown-linux-gnu release
+      uses: actions/upload-artifact@v4
+      with:
+        name: bb_runner-aarch64
+        path: target/aarch64-unknown-linux-gnu/release/bb_runner
+
+    - name: Upload aarch64-unknown-linux-gnu debug
+      uses: actions/upload-artifact@v4
+      with:
+        name: bb_runner-aarch64-dbg
+        path: target/aarch64-unknown-linux-gnu/debug/bb_runner
