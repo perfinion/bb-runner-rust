@@ -1,6 +1,7 @@
 use std::convert::AsRef;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 //use std::sync::Arc;
 use rsjsonnet_front::Session;
 use rsjsonnet_lang::arena::Arena;
@@ -10,6 +11,19 @@ use tracing::{self, info, warn};
 // use serde_json::Result;
 use std::thread;
 
+fn default_cgroup_path() -> String {
+    "bb_runner".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CgroupConfig {
+    #[serde(default)]
+    pub delegation: bool,
+    #[serde(default = "default_cgroup_path")]
+    pub path: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Configuration {
@@ -18,6 +32,12 @@ pub(crate) struct Configuration {
     pub num_cpus: u32,
     pub memory_max: u32,
     pub rw_paths: Vec<String>,
+    #[serde(default)]
+    pub cgroup: Option<CgroupConfig>,
+    #[serde(skip)]
+    pub cgroup_root: Option<Arc<PathBuf>>,
+    #[serde(skip)]
+    pub cgroup_path: Option<String>,
 }
 
 fn add_var(session: &mut Session, name: &str, val: &str) -> Option<()> {

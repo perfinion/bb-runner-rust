@@ -8,4 +8,7 @@
     "/proc",
     "/tmp",
   ],
+  cgroup: {
+    delegation: true,
+  },
 }

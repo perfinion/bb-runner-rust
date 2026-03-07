@@ -116,6 +116,10 @@ impl Runner for RunnerService {
             let exit_resuse = wait_child(&mut child, token).await;
             info!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
+            if let Some(ref root) = child_cfg.cgroup_root {
+                crate::cgroup::cleanup_job_cgroup(root, &processor.to_string(), child_cfg.cgroup_path.as_deref());
+            }
+
             procque.give_cpu(processor).await;
             exit_resuse
         });

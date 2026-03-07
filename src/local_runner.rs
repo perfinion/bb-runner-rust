@@ -120,6 +120,12 @@ pub(crate) fn spawn_child(
     c.stderr(stderr_file);
     c.hostname("localhost");
     c.cgroup(processor.to_string());
+    if let Some(ref root) = child_cfg.cgroup_root {
+        c.cgroup_root(root.as_ref().clone());
+    }
+    if let Some(ref path) = child_cfg.cgroup_path {
+        c.cgroup_path(path);
+    }
     c.memory_max(child_cfg.memory_max);
     c.rw_paths(&child_cfg.rw_paths);
 

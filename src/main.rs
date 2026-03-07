@@ -3,7 +3,8 @@
 use std::env;
 use std::io::Error;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tonic::transport::Server;
 use tracing::{self, error, warn};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
@@ -16,6 +17,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use crate::proto::runner::runner_server::RunnerServer;
 use crate::service::RunnerService;
 
+mod cgroup;
 mod child;
 mod config;
 mod local_runner;
@@ -67,12 +69,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(Error::new(ErrorKind::InvalidFilename, "Missing config file!").into());
     }
 
-    let Some(config) = config::Configuration::new(&argv[1]) else {
+    let Some(mut config) = config::Configuration::new(&argv[1]) else {
         error!("Failed to parse configuration");
         return Err(
             Error::new(ErrorKind::InvalidFilename, "Failed to parse configuration!").into(),
         );
     };
+
+    let cgroup_root: Option<PathBuf> = match config.cgroup.as_ref() {
+        Some(cg) if cg.delegation => Some(cgroup::setup_delegation()?),
+        _ => None,
+    };
+    config.cgroup_root = cgroup_root.map(|p| Arc::new(p));
+    config.cgroup_path = config.cgroup.as_ref().map(|cg| cg.path.clone());
 
     let socket_stream = bind_socket(config.grpc_listen_path.as_ref())?;
 
