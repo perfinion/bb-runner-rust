@@ -3,3 +3,9 @@ rustflags = ["-Zsanitizer=address", "-Zsanitizer=memory"]
 
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
+
+# Point cargo at the cross-linker for aarch64 musl.
+# Rust bundles its own musl libc; gcc-aarch64-linux-gnu is only used as
+# a linker driver to produce aarch64 ELF binaries.
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-gnu-gcc"
