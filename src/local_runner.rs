@@ -128,6 +128,7 @@ pub(crate) fn spawn_child(
     }
     c.memory_max(child_cfg.memory_max);
     c.rw_paths(&child_cfg.rw_paths);
+    c.hidden_paths(&child_cfg.hidden_paths);
 
     if let Some(p) = homedir.to_str() {
         c.rw_path(p);

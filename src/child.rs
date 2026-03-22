@@ -54,6 +54,7 @@ pub(crate) struct Command {
     mem_max: Option<u32>,
     namespaces: CloneFlags,
     rw_paths: Vec<String>,
+    hidden_paths: Vec<String>,
 }
 
 struct ChildData<'a> {
@@ -63,6 +64,7 @@ struct ChildData<'a> {
     stderr: Option<RawFd>,
     hostname: Option<&'a str>,
     rw_paths: &'a Vec<String>,
+    hidden_paths: &'a Vec<String>,
 }
 
 impl std::convert::From<process::Command> for Command {
@@ -82,6 +84,7 @@ impl std::convert::From<process::Command> for Command {
                 | CloneFlags::CLONE_NEWNS
                 | CloneFlags::CLONE_NEWUSER,
             rw_paths: Vec::new(),
+            hidden_paths: Vec::new(),
         }
     }
 }
@@ -97,6 +100,7 @@ impl Command {
             stderr: self.stderr.as_ref().map(|s| s.as_raw_fd()),
             hostname: self.hostname.as_ref().map(String::as_ref),
             rw_paths: self.rw_paths.as_ref(),
+            hidden_paths: self.hidden_paths.as_ref(),
         };
 
         let pid = clone_pid1(self.namespaces, &mut child_data)?;
@@ -157,6 +161,11 @@ impl Command {
 
     pub fn rw_paths(&mut self, paths: &[String]) -> &mut Command {
         self.rw_paths.extend_from_slice(paths);
+        self
+    }
+
+    pub fn hidden_paths(&mut self, paths: &[String]) -> &mut Command {
+        self.hidden_paths.extend_from_slice(paths);
         self
     }
 }
@@ -235,6 +244,32 @@ fn bind_mount_rw_paths(rw_paths: &[String]) -> Result<()> {
                     None::<&'static str>,
                 )?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Hide directories by mounting a tmpfs over each path.
+/// This makes the original contents inaccessible to the child.
+/// Paths that also appear in `rw_paths` are mounted read-write;
+/// all others are mounted read-only.
+fn mount_hidden_paths(hidden_paths: &[String], rw_paths: &[String]) -> Result<()> {
+    for hidden in hidden_paths {
+        let p = Path::new(hidden.as_str());
+        if p.exists() {
+            let mut flags = MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC;
+            if !rw_paths.iter().any(|rw| hidden == rw) {
+                flags |= MsFlags::MS_RDONLY;
+            }
+            trace!("Hiding path {} with tmpfs (ro={})", hidden, flags.contains(MsFlags::MS_RDONLY));
+            mount::mount(
+                Some("tmpfs"),
+                p,
+                Some("tmpfs"),
+                flags,
+                Some("size=0"),
+            )?;
         }
     }
 
@@ -343,6 +378,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     )?;
 
     remount_all_readonly(child_data.rw_paths)?;
+    mount_hidden_paths(child_data.hidden_paths, child_data.rw_paths)?;
     net_loopback_up()?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());

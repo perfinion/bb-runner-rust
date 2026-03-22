@@ -33,6 +33,8 @@ pub(crate) struct Configuration {
     pub memory_max: u32,
     pub rw_paths: Vec<String>,
     #[serde(default)]
+    pub hidden_paths: Vec<String>,
+    #[serde(default)]
     pub cgroup: Option<CgroupConfig>,
     #[serde(skip)]
     pub cgroup_root: Option<Arc<PathBuf>>,
