@@ -75,10 +75,17 @@ pub(crate) fn setup_delegation() -> Result<PathBuf> {
         fs::create_dir(&runner_cgroup)?;
     }
 
-    // Move our own PID into the runner child cgroup
-    let my_pid = std::process::id();
-    write_existing_file(runner_cgroup.join("cgroup.procs"), my_pid.to_string())?;
-    info!("Moved runner (pid {}) into {:?}", my_pid, runner_cgroup);
+    // Move all processes from the delegated root into the runner child cgroup.
+    // This is necessary when running as pid 1 inside a container: the pid1
+    // reaper parent is also in this cgroup and must be moved out before
+    // subtree controllers can be enabled (cgroup v2 "no internal processes"
+    // constraint).
+    let procs = fs::read_to_string(delegated_root.join("cgroup.procs"))?;
+    let runner_procs_path = runner_cgroup.join("cgroup.procs");
+    for pid_str in procs.split_whitespace() {
+        write_existing_file(&runner_procs_path, pid_str)?;
+        info!("Moved pid {} into {:?}", pid_str, runner_cgroup);
+    }
 
     // Enable controllers on the delegated root so job cgroups can use them
     // Read available controllers first
