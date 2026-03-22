@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
@@ -18,6 +19,7 @@ use nix::sys::signal::{self, SaFlags, SigHandler, SigSet, SigmaskHow, Signal};
 use nix::sys::socket::{self, AddressFamily, SockFlag, SockProtocol, SockType};
 use nix::unistd::{self, Gid, Pid, Uid};
 
+use crate::config::NetInterfaceConfig;
 use crate::mmaps::StackMap;
 use crate::mounts::{MntEntOpener, MntEntWrapper};
 use crate::resource::{ExitResources, ResourceUsage};
@@ -55,6 +57,7 @@ pub(crate) struct Command {
     namespaces: CloneFlags,
     rw_paths: Vec<String>,
     hidden_paths: Vec<String>,
+    net_interfaces: HashMap<String, NetInterfaceConfig>,
 }
 
 struct ChildData<'a> {
@@ -65,6 +68,7 @@ struct ChildData<'a> {
     hostname: Option<&'a str>,
     rw_paths: &'a Vec<String>,
     hidden_paths: &'a Vec<String>,
+    net_interfaces: &'a HashMap<String, NetInterfaceConfig>,
 }
 
 impl std::convert::From<process::Command> for Command {
@@ -85,6 +89,7 @@ impl std::convert::From<process::Command> for Command {
                 | CloneFlags::CLONE_NEWUSER,
             rw_paths: Vec::new(),
             hidden_paths: Vec::new(),
+            net_interfaces: HashMap::new(),
         }
     }
 }
@@ -101,6 +106,7 @@ impl Command {
             hostname: self.hostname.as_ref().map(String::as_ref),
             rw_paths: self.rw_paths.as_ref(),
             hidden_paths: self.hidden_paths.as_ref(),
+            net_interfaces: &self.net_interfaces,
         };
 
         let pid = clone_pid1(self.namespaces, &mut child_data)?;
@@ -166,6 +172,11 @@ impl Command {
 
     pub fn hidden_paths(&mut self, paths: &[String]) -> &mut Command {
         self.hidden_paths.extend_from_slice(paths);
+        self
+    }
+
+    pub fn net_interfaces(&mut self, ifaces: &HashMap<String, NetInterfaceConfig>) -> &mut Command {
+        self.net_interfaces.extend(ifaces.iter().map(|(k, v)| (k.clone(), v.clone())));
         self
     }
 }
@@ -340,6 +351,192 @@ fn net_loopback_up() -> Result<()> {
     Ok(())
 }
 
+/// Helper: set an interface name into an ifreq struct.
+fn set_ifr_name(ifr: &mut ifreq, name: &str) -> Result<()> {
+    let name_bytes = name.as_bytes();
+    if name_bytes.len() >= libc::IFNAMSIZ {
+        return Err(Error::other("interface name too long"));
+    }
+    for (dst, src) in ifr.ifr_name.iter_mut().zip(name_bytes.iter()) {
+        *dst = *src as _;
+    }
+    Ok(())
+}
+
+/// Helper: build a sockaddr_in from a host-byte-order IPv4 address.
+fn make_sockaddr_in(addr: u32) -> libc::sockaddr_in {
+    let mut sa: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    sa.sin_family = libc::AF_INET as libc::sa_family_t;
+    sa.sin_addr.s_addr = addr.to_be();
+    sa
+}
+
+/// Create a dummy network interface using a netlink RTM_NEWLINK message.
+fn netlink_create_dummy(name: &str) -> Result<()> {
+    // ifinfomsg is not in the libc crate
+    #[repr(C)]
+    struct Ifinfomsg {
+        ifi_family: u8,
+        _pad: u8,
+        ifi_type: u16,
+        ifi_index: i32,
+        ifi_flags: u32,
+        ifi_change: u32,
+    }
+
+    let nl_fd = unsafe {
+        libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_ROUTE)
+    };
+    if nl_fd < 0 {
+        return Err(Error::last_os_error());
+    }
+    // Wrap so it auto-closes on all exit paths.
+    let nl_fd = unsafe { OwnedFd::from_raw_fd(nl_fd) };
+
+    let mut sa: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
+    sa.nl_family = libc::AF_NETLINK as u16;
+    if unsafe {
+        libc::bind(
+            nl_fd.as_raw_fd(),
+            &sa as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
+        )
+    } < 0
+    {
+        return Err(Error::last_os_error());
+    }
+
+    // Helper: round up to the next multiple of 4 (NLA alignment).
+    fn nla_align(len: usize) -> usize {
+        (len + 3) & !3
+    }
+
+    let name_bytes = name.as_bytes();
+    let ifname_nla_len = std::mem::size_of::<libc::nlattr>() + name_bytes.len() + 1; // +1 for NUL
+
+    let info_kind_payload = b"dummy\0";
+    let info_kind_nla_len = std::mem::size_of::<libc::nlattr>() + info_kind_payload.len();
+    let linkinfo_nla_len = std::mem::size_of::<libc::nlattr>() + nla_align(info_kind_nla_len);
+
+    let hdr_len = std::mem::size_of::<libc::nlmsghdr>()
+        + nla_align(std::mem::size_of::<Ifinfomsg>())
+        + nla_align(ifname_nla_len)
+        + nla_align(linkinfo_nla_len);
+
+    let mut buf = vec![0u8; hdr_len];
+    let mut offset = 0;
+
+    // nlmsghdr
+    let hdr = unsafe { &mut *(buf.as_mut_ptr().add(offset) as *mut libc::nlmsghdr) };
+    hdr.nlmsg_len = hdr_len as u32;
+    hdr.nlmsg_type = libc::RTM_NEWLINK;
+    hdr.nlmsg_flags =
+        (libc::NLM_F_REQUEST | libc::NLM_F_CREATE | libc::NLM_F_EXCL | libc::NLM_F_ACK) as u16;
+    hdr.nlmsg_seq = 1;
+    hdr.nlmsg_pid = 0;
+    offset += std::mem::size_of::<libc::nlmsghdr>();
+
+    // ifinfomsg
+    let ifi = unsafe { &mut *(buf.as_mut_ptr().add(offset) as *mut Ifinfomsg) };
+    ifi.ifi_family = libc::AF_UNSPEC as u8;
+    offset += nla_align(std::mem::size_of::<Ifinfomsg>());
+
+    // IFLA_IFNAME
+    let nla = unsafe { &mut *(buf.as_mut_ptr().add(offset) as *mut libc::nlattr) };
+    nla.nla_len = ifname_nla_len as u16;
+    nla.nla_type = libc::IFLA_IFNAME as u16;
+    let payload_start = offset + std::mem::size_of::<libc::nlattr>();
+    buf[payload_start..payload_start + name_bytes.len()].copy_from_slice(name_bytes);
+    buf[payload_start + name_bytes.len()] = 0; // NUL
+    offset += nla_align(ifname_nla_len);
+
+    // IFLA_LINKINFO (nested)
+    let nla = unsafe { &mut *(buf.as_mut_ptr().add(offset) as *mut libc::nlattr) };
+    nla.nla_len = linkinfo_nla_len as u16;
+    nla.nla_type = libc::IFLA_LINKINFO as u16 | libc::NLA_F_NESTED as u16;
+    let nested_offset = offset + std::mem::size_of::<libc::nlattr>();
+
+    // IFLA_INFO_KIND = "dummy"
+    let nla = unsafe { &mut *(buf.as_mut_ptr().add(nested_offset) as *mut libc::nlattr) };
+    nla.nla_len = info_kind_nla_len as u16;
+    nla.nla_type = libc::IFLA_INFO_KIND as u16;
+    let payload_start = nested_offset + std::mem::size_of::<libc::nlattr>();
+    buf[payload_start..payload_start + info_kind_payload.len()].copy_from_slice(info_kind_payload);
+
+    // Send
+    if unsafe { libc::send(nl_fd.as_raw_fd(), buf.as_ptr() as *const _, buf.len(), 0) } < 0 {
+        return Err(Error::last_os_error());
+    }
+
+    // Read ACK
+    let mut resp = [0u8; 1024];
+    let n = unsafe { libc::recv(nl_fd.as_raw_fd(), resp.as_mut_ptr() as *mut _, resp.len(), 0) };
+    if n < 0 {
+        return Err(Error::last_os_error());
+    }
+    if (n as usize) >= std::mem::size_of::<libc::nlmsghdr>() {
+        let resp_hdr = unsafe { &*(resp.as_ptr() as *const libc::nlmsghdr) };
+        if resp_hdr.nlmsg_type == libc::NLMSG_ERROR as u16 {
+            let err_offset = std::mem::size_of::<libc::nlmsghdr>();
+            if (n as usize) >= err_offset + 4 {
+                let errno = unsafe { *(resp.as_ptr().add(err_offset) as *const i32) };
+                if errno != 0 {
+                    return Err(Error::from_raw_os_error(-errno));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Configure a network interface: set IP address, netmask, and bring it up.
+fn setup_net_interface(name: &str, cfg: &NetInterfaceConfig) -> Result<()> {
+    let sock: OwnedFd = socket::socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC,
+        None::<SockProtocol>,
+    )?;
+
+    let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+    set_ifr_name(&mut ifr, name)?;
+
+    // Set IP address (pre-parsed in config)
+    ifr.ifr_ifru.ifru_addr = unsafe { std::mem::transmute(make_sockaddr_in(cfg.ip)) };
+    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFADDR as _, &ifr) } < 0 {
+        return Err(Error::last_os_error());
+    }
+
+    // Set netmask (pre-parsed in config)
+    ifr.ifr_ifru.ifru_netmask = unsafe { std::mem::transmute(make_sockaddr_in(cfg.netmask)) };
+    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFNETMASK as _, &ifr) } < 0 {
+        return Err(Error::last_os_error());
+    }
+
+    // Set flags: UP + optionally MULTICAST
+    let mut flags = libc::IFF_UP as i16;
+    if cfg.multicast {
+        flags |= libc::IFF_MULTICAST as i16;
+    }
+    ifr.ifr_ifru.ifru_flags = flags;
+    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS as _, &ifr) } < 0 {
+        return Err(Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+/// Create and configure all dummy network interfaces.
+fn setup_net_interfaces(interfaces: &HashMap<String, NetInterfaceConfig>) -> Result<()> {
+    for (name, cfg) in interfaces {
+        trace!("Creating dummy interface {} with addr {}", name, cfg.addr);
+        netlink_create_dummy(name)?;
+        setup_net_interface(name, cfg)?;
+    }
+    Ok(())
+}
+
 fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     let pid = Pid::this();
     nix::unistd::setpgid(pid, pid)?;
@@ -380,6 +577,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     remount_all_readonly(child_data.rw_paths)?;
     mount_hidden_paths(child_data.hidden_paths, child_data.rw_paths)?;
     net_loopback_up()?;
+    setup_net_interfaces(child_data.net_interfaces)?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 

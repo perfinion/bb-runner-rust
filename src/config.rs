@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::AsRef;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -7,8 +8,9 @@ use rsjsonnet_front::Session;
 use rsjsonnet_lang::arena::Arena;
 use rsjsonnet_lang::program::Value;
 use serde::{Deserialize, Serialize};
-use tracing::{self, info, warn};
+use tracing::{self, error, info, warn};
 // use serde_json::Result;
+use std::net::Ipv4Addr;
 use std::thread;
 
 fn default_cgroup_path() -> String {
@@ -26,6 +28,40 @@ pub(crate) struct CgroupConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct NetInterfaceConfig {
+    pub addr: String,
+    #[serde(default)]
+    pub multicast: bool,
+    /// Parsed IPv4 address in host byte order. Populated by Configuration::new().
+    #[serde(skip)]
+    pub ip: u32,
+    /// Parsed netmask in host byte order. Populated by Configuration::new().
+    #[serde(skip)]
+    pub netmask: u32,
+}
+
+/// Parse an "IP/prefix" string into (IPv4 address, netmask) both in host byte order.
+fn parse_cidr(addr: &str) -> Option<(u32, u32)> {
+    let (ip_str, prefix_str) = addr.split_once('/')?;
+    let prefix_len: u32 = prefix_str.parse().ok()?;
+    if prefix_len > 32 {
+        return None;
+    }
+
+    let ip: Ipv4Addr = ip_str.parse().ok()?;
+    let ip_host = u32::from_be_bytes(ip.octets());
+
+    let mask_host = if prefix_len == 0 {
+        0u32
+    } else {
+        !0u32 << (32 - prefix_len)
+    };
+
+    Some((ip_host, mask_host))
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Configuration {
     pub build_directory_path: PathBuf,
     pub grpc_listen_path: PathBuf,
@@ -34,6 +70,8 @@ pub(crate) struct Configuration {
     pub rw_paths: Vec<String>,
     #[serde(default)]
     pub hidden_paths: Vec<String>,
+    #[serde(default)]
+    pub net_interfaces: HashMap<String, NetInterfaceConfig>,
     #[serde(default)]
     pub cgroup: Option<CgroupConfig>,
     #[serde(skip)]
@@ -85,6 +123,18 @@ impl Configuration {
         if config.num_cpus == 0 {
             config.num_cpus = thread::available_parallelism().map_or(1, |p| p.get() as u32);
             info!("Number of processors = {}", config.num_cpus);
+        }
+
+        for (name, iface) in config.net_interfaces.iter_mut() {
+            let (ip, netmask) = match parse_cidr(&iface.addr) {
+                Some(v) => v,
+                None => {
+                    error!("Invalid addr {:?} for interface {}", iface.addr, name);
+                    return None;
+                }
+            };
+            iface.ip = ip;
+            iface.netmask = netmask;
         }
 
         warn!("Config obj: {:?}", config);
