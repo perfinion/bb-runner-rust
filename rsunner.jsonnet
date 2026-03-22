@@ -8,6 +8,15 @@
     "/proc",
     "/tmp",
   ],
+  hiddenPaths: [
+    "/home",
+  ],
+  netInterfaces: {
+    dummyeth0: {
+      addr: "172.16.0.110/24",
+      multicast: true,
+    },
+  },
   cgroup: {
     delegation: true,
   },
