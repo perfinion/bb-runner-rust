@@ -130,6 +130,8 @@ pub(crate) fn spawn_child(
     c.rw_paths(&child_cfg.rw_paths);
     c.hidden_paths(&child_cfg.hidden_paths);
     c.net_interfaces(&child_cfg.net_interfaces);
+    c.run_as_user(child_cfg.run_as_user);
+    c.run_as_group(child_cfg.run_as_group);
 
     if let Some(p) = homedir.to_str() {
         c.rw_path(p);

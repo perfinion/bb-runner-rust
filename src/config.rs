@@ -73,6 +73,10 @@ pub(crate) struct Configuration {
     #[serde(default)]
     pub net_interfaces: HashMap<String, NetInterfaceConfig>,
     #[serde(default)]
+    pub run_as_user: Option<u32>,
+    #[serde(default)]
+    pub run_as_group: Option<u32>,
+    #[serde(default)]
     pub cgroup: Option<CgroupConfig>,
     #[serde(skip)]
     pub cgroup_root: Option<Arc<PathBuf>>,

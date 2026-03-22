@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
 use std::time::Duration;
@@ -58,6 +58,8 @@ pub(crate) struct Command {
     rw_paths: Vec<String>,
     hidden_paths: Vec<String>,
     net_interfaces: HashMap<String, NetInterfaceConfig>,
+    run_as_user: Option<u32>,
+    run_as_group: Option<u32>,
 }
 
 struct ChildData<'a> {
@@ -69,6 +71,8 @@ struct ChildData<'a> {
     rw_paths: &'a Vec<String>,
     hidden_paths: &'a Vec<String>,
     net_interfaces: &'a HashMap<String, NetInterfaceConfig>,
+    run_as_user: Option<u32>,
+    run_as_group: Option<u32>,
 }
 
 impl std::convert::From<process::Command> for Command {
@@ -90,6 +94,8 @@ impl std::convert::From<process::Command> for Command {
             rw_paths: Vec::new(),
             hidden_paths: Vec::new(),
             net_interfaces: HashMap::new(),
+            run_as_user: None,
+            run_as_group: None,
         }
     }
 }
@@ -107,13 +113,15 @@ impl Command {
             rw_paths: self.rw_paths.as_ref(),
             hidden_paths: self.hidden_paths.as_ref(),
             net_interfaces: &self.net_interfaces,
+            run_as_user: self.run_as_user,
+            run_as_group: self.run_as_group,
         };
 
         let pid = clone_pid1(self.namespaces, &mut child_data)?;
         drop(read_pipe);
 
-        write_uid_map(pid, unistd::getuid())?;
-        write_gid_map(pid, unistd::getgid())?;
+        write_uid_map(pid, unistd::getuid(), self.run_as_user)?;
+        write_gid_map(pid, unistd::getgid(), self.run_as_group)?;
         if let Some(cg) = self.cgroup.as_ref().map(String::as_ref) {
             crate::cgroup::move_child_cgroup(pid, cg, self.mem_max, self.cgroup_root.as_deref(), self.cgroup_path.as_deref())?;
         }
@@ -179,6 +187,16 @@ impl Command {
         self.net_interfaces.extend(ifaces.iter().map(|(k, v)| (k.clone(), v.clone())));
         self
     }
+
+    pub fn run_as_user(&mut self, uid: Option<u32>) -> &mut Command {
+        self.run_as_user = uid;
+        self
+    }
+
+    pub fn run_as_group(&mut self, gid: Option<u32>) -> &mut Command {
+        self.run_as_group = gid;
+        self
+    }
 }
 
 fn write_existing_file<P: AsRef<Path>, S: AsRef<str>>(path: P, contents: S) -> Result<()> {
@@ -189,13 +207,26 @@ fn write_existing_file<P: AsRef<Path>, S: AsRef<str>>(path: P, contents: S) -> R
         .and_then(|mut f| f.write_all(contents.as_ref().as_bytes()))
 }
 
-fn write_uid_map(pid: Pid, outer_uid: Uid) -> Result<()> {
-    write_existing_file(format!("/proc/{pid}/uid_map"), format!("0 {outer_uid} 1"))
+fn write_uid_map(pid: Pid, outer_uid: Uid, run_as_uid: Option<u32>) -> Result<()> {
+    let map = match run_as_uid {
+        // Build runs as root inside; only uid 0 needed.
+        Some(0) | None => format!("0 {} 1", outer_uid),
+        // Outer is root: a single contiguous 1:1 range covers both uid 0 and the target.
+        Some(uid) if outer_uid.as_raw() == 0 => format!("0 0 {}", uid + 1),
+        // Outer is non-root: two ranges. Requires CAP_SETUID or subordinate UIDs.
+        Some(uid) => format!("0 {} 1\n{} {} 1", outer_uid, uid, uid),
+    };
+    write_existing_file(format!("/proc/{pid}/uid_map"), map)
 }
 
-fn write_gid_map(pid: Pid, outer_gid: Gid) -> Result<()> {
+fn write_gid_map(pid: Pid, outer_gid: Gid, run_as_gid: Option<u32>) -> Result<()> {
     write_existing_file(format!("/proc/{pid}/setgroups"), "deny")?;
-    write_existing_file(format!("/proc/{pid}/gid_map"), format!("0 {outer_gid} 1"))
+    let map = match run_as_gid {
+        Some(0) | None => format!("0 {} 1", outer_gid),
+        Some(gid) if outer_gid.as_raw() == 0 => format!("0 0 {}", gid + 1),
+        Some(gid) => format!("0 {} 1\n{} {} 1", outer_gid, gid, gid),
+    };
+    write_existing_file(format!("/proc/{pid}/gid_map"), map)
 }
 
 /// Resets all signal handlers and masks so nothing is inherited from parents
@@ -589,6 +620,15 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         let _ = unistd::dup2(stderr, libc::STDERR_FILENO)?;
     }
     close_range_fds((libc::STDERR_FILENO as c_uint) + 1)?;
+
+    // Drop to the configured uid/gid for the build command.
+    // pid1 setup (mounts, network, etc.) has already completed as root.
+    if let Some(gid) = child_data.run_as_group {
+        child_data.cmd.gid(gid);
+    }
+    if let Some(uid) = child_data.run_as_user {
+        child_data.cmd.uid(uid);
+    }
 
     let mut child = child_data.cmd.spawn()?;
 
