@@ -213,7 +213,38 @@ fn close_range_fds(first: c_uint) -> Result<()> {
     }
 }
 
+/// Bind-mount any `rw_path` that is not already a mountpoint onto itself.
+/// This creates a separate mount so the parent can be remounted RO while
+/// the rw_path stays RW.
+fn bind_mount_rw_paths(rw_paths: &[String]) -> Result<()> {
+    let mntent = MntEntOpener::new(Path::new("/proc/self/mounts"))?;
+    let entries: Vec<MntEntWrapper> = mntent.list_all()?;
+    let mountpoints: std::collections::HashSet<&str> =
+        entries.iter().map(|e| e.mnt_dir.as_str()).collect();
+
+    for rw in rw_paths {
+        if !mountpoints.contains(rw.as_str()) {
+            let p = Path::new(rw.as_str());
+            if p.exists() {
+                trace!("Bind-mounting rw_path {} onto itself", rw);
+                mount::mount(
+                    Some(p),
+                    p,
+                    None::<&'static str>,
+                    MsFlags::MS_BIND | MsFlags::MS_REC,
+                    None::<&'static str>,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn remount_all_readonly(rw_paths: &[String]) -> Result<()> {
+    bind_mount_rw_paths(rw_paths)?;
+
+    // Re-read mounts now that we may have added new bind mounts.
     let mntent = MntEntOpener::new(Path::new("/proc/self/mounts"))?;
 
     let entries: Vec<MntEntWrapper> = mntent.list_all()?;
