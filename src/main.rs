@@ -52,10 +52,75 @@ fn bind_socket(path: &Path) -> Result<UnixListenerStream, Box<dyn std::error::Er
     Ok(UnixListenerStream::new(socket))
 }
 
+/// If we are pid 1 inside a container, fork a child to do the real work
+/// and stay behind as a reaper.  Returns only in the forked child.
+/// The parent loop reaps zombies and exits with the child's status.
+fn maybe_reexec_as_pid1() {
+    if std::process::id() != 1 {
+        return;
+    }
+
+    // We are pid 1 – fork so the child can run the real program.
+    match unsafe { nix::unistd::fork() } {
+        Ok(nix::unistd::ForkResult::Child) => {
+            // Child continues with normal startup.
+            return;
+        }
+        Ok(nix::unistd::ForkResult::Parent { child }) => {
+            // Parent stays as pid 1 reaper.
+            eprintln!("bb_runner: running as pid1, forked child {child}");
+            std::process::exit(pid1_reap_loop(child));
+        }
+        Err(e) => {
+            eprintln!("bb_runner: fork failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Reap all children.  When `main_child` exits, return its exit code.
+fn pid1_reap_loop(main_child: nix::unistd::Pid) -> i32 {
+    use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+
+    loop {
+        // Wait for any child (-1).  Block until at least one exits.
+        match waitpid(None, Some(WaitPidFlag::empty())) {
+            Ok(WaitStatus::Exited(pid, code)) => {
+                if pid == main_child {
+                    return code;
+                }
+            }
+            Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                if pid == main_child {
+                    // Translate signal death to 128 + signal number (shell convention).
+                    return 128 + sig as i32;
+                }
+            }
+            Ok(_) => {
+                // Stopped / continued / other – keep reaping.
+            }
+            Err(nix::errno::Errno::ECHILD) => {
+                // No more children at all – main child must have exited
+                // before we could observe it (race).  Default to failure.
+                eprintln!("bb_runner pid1: no children left");
+                return 1;
+            }
+            Err(e) => {
+                eprintln!("bb_runner pid1: waitpid error: {e}");
+                return 1;
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 // CLONE_NEWUSER requires that the calling process is not threaded
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // If we are pid 1 (e.g. inside a container), fork so that we can act
+    // as a proper init process that reaps zombies.  This returns only in
+    // the forked child; the parent stays in a reap loop.
+    maybe_reexec_as_pid1();
     // if RUST_LOG var is not set, default to debug
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::DEBUG.into())
