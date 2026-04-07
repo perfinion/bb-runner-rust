@@ -366,6 +366,21 @@ fn remount_all_readonly(rw_paths: &[String]) -> Result<()> {
 // SIOCSIFFLAGS is a "bad" ioctl because it uses a raw constant
 // rather than the encoded _IOW type.
 nix::ioctl_write_ptr_bad!(ioctl_set_ifflags, libc::SIOCSIFFLAGS, ifreq);
+nix::ioctl_write_ptr_bad!(ioctl_set_ifaddr, libc::SIOCSIFADDR, ifreq);
+nix::ioctl_write_ptr_bad!(ioctl_set_ifnetmask, libc::SIOCSIFNETMASK, ifreq);
+
+/// Helper: set an interface name into an ifreq struct.
+fn new_ifr_name(name: &str) -> Result<ifreq> {
+    let mut ifr: ifreq = unsafe { std::mem::zeroed() };
+    let name_bytes = name.as_bytes();
+    if name_bytes.len() >= libc::IFNAMSIZ {
+        return Err(Error::other("interface name too long"));
+    }
+    for (dst, src) in ifr.ifr_name.iter_mut().zip(name_bytes.iter()) {
+        *dst = *src as _;
+    }
+    Ok(ifr)
+}
 
 fn net_loopback_up() -> Result<()> {
     let sock: OwnedFd = socket::socket(
@@ -375,28 +390,10 @@ fn net_loopback_up() -> Result<()> {
         None::<SockProtocol>,
     )?;
 
-    let mut ifr: ifreq = unsafe { std::mem::zeroed() };
-    for (dst, src) in ifr.ifr_name.iter_mut().zip(b"lo\0".iter()) {
-        *dst = *src as _;
-    }
+    let mut ifr: ifreq = new_ifr_name("lo")?;
+    ifr.ifr_ifru.ifru_flags = libc::IFF_UP as i16;
+    unsafe { ioctl_set_ifflags(sock.as_raw_fd(), &ifr)?; }
 
-    unsafe {
-        ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16;
-        ioctl_set_ifflags(sock.as_raw_fd(), &ifr)?;
-    }
-
-    Ok(())
-}
-
-/// Helper: set an interface name into an ifreq struct.
-fn set_ifr_name(ifr: &mut ifreq, name: &str) -> Result<()> {
-    let name_bytes = name.as_bytes();
-    if name_bytes.len() >= libc::IFNAMSIZ {
-        return Err(Error::other("interface name too long"));
-    }
-    for (dst, src) in ifr.ifr_name.iter_mut().zip(name_bytes.iter()) {
-        *dst = *src as _;
-    }
     Ok(())
 }
 
@@ -510,6 +507,7 @@ fn netlink_create_dummy(name: &str) -> Result<()> {
 }
 
 /// Configure a network interface: set IP address, netmask, and bring it up.
+#[tracing::instrument(ret)]
 fn setup_net_interface(name: &str, cfg: &NetInterfaceConfig) -> Result<()> {
     info!("Setup Net Interface, name = {}", name);
     let sock: OwnedFd = socket::socket(
@@ -519,28 +517,27 @@ fn setup_net_interface(name: &str, cfg: &NetInterfaceConfig) -> Result<()> {
         None::<SockProtocol>,
     )?;
 
-    let mut ifr: ifreq = unsafe { std::mem::zeroed() };
-    set_ifr_name(&mut ifr, name)?;
-
     // Set IP address (pre-parsed in config)
+    let mut ifr: ifreq = new_ifr_name(name)?;
     ifr.ifr_ifru.ifru_addr = unsafe { std::mem::transmute(make_sockaddr_in(cfg.ip)) };
-    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFADDR as _, &ifr) } < 0 {
-        return Err(Error::last_os_error());
-    }
+    unsafe { ioctl_set_ifaddr(sock.as_raw_fd(), &ifr)?; }
+    info!("Interface IP set, name = {}, ip = {}", name, cfg.ip);
 
     // Set netmask (pre-parsed in config)
+    let mut ifr: ifreq = new_ifr_name(name)?; // dont re-use union
     ifr.ifr_ifru.ifru_netmask = unsafe { std::mem::transmute(make_sockaddr_in(cfg.netmask)) };
-    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFNETMASK as _, &ifr) } < 0 {
-        return Err(Error::last_os_error());
-    }
+    unsafe { ioctl_set_ifnetmask(sock.as_raw_fd(), &ifr)?; }
+    info!("Interface Netmask set, name = {}, netmask = {}", name, cfg.netmask);
 
     // Set flags: UP + optionally MULTICAST
+    let mut ifr: ifreq = new_ifr_name(name)?;
     let mut flags = libc::IFF_UP as i16;
     if cfg.multicast {
         flags |= libc::IFF_MULTICAST as i16;
     }
     ifr.ifr_ifru.ifru_flags = flags;
     unsafe { ioctl_set_ifflags(sock.as_raw_fd(), &ifr)?; }
+    info!("Interface set UP, name = {}, flags = {}", name, flags);
 
     Ok(())
 }
