@@ -1,3 +1,4 @@
+use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::time::Duration;
 
@@ -29,6 +30,12 @@ pub(crate) struct ExitResources {
     pub status: ExitStatus,
     /// Resource used by the process and all its children
     pub rusage: ResourceUsage,
+}
+
+impl ExitResources {
+    pub fn raw_wait_status(&self) -> i32 {
+        self.status.into_raw()
+    }
 }
 
 impl From<ResourceUsage> for PosixResourceUsage {

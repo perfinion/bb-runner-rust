@@ -109,7 +109,13 @@ impl Runner for RunnerService {
 
         let childtask: JoinHandle<TonicResult<ExitResources>> = tokio::spawn(async move {
             let processor = procque.take_cpu().await?;
-            let mut child = spawn_child(processor, &child_cfg, &run)?;
+            let mut child = match spawn_child(processor, &child_cfg, &run) {
+                Ok(child) => child,
+                Err(e) => {
+                    procque.give_cpu(processor).await;
+                    return Err(e);
+                }
+            };
             let pid = child.id();
             debug!("Started process: {} job {}", pid, processor);
 
@@ -124,26 +130,17 @@ impl Runner for RunnerService {
             exit_resuse
         });
 
+        // JoinHandle returns a Result, need to double chain the ?
         let exit_resuse = childtask
             .await
-            .map_err(|_| Status::internal("No Exit Code"))?;
-
-        let exit_code = match exit_resuse {
-            Ok(ref e) => e.status.code(),
-            Err(_) => Some(255),
-        };
+            .map_err(|_| Status::internal("No Exit Code"))??;
 
         let mut runresp = RunResponse::default();
-        match exit_code {
-            Some(code) => runresp.exit_code = code,
-            None => return Err(Status::internal("No Exit Code")),
-        }
-        if let Ok(e) = exit_resuse {
-            let pbres = e.rusage.into();
-            if let Ok(r) = PbAny::from_msg::<PosixResourceUsage>(&pbres) {
-                runresp.resource_usage = vec![r];
-            };
-        }
+        runresp.exit_code = exit_resuse.raw_wait_status();
+        let pbres = exit_resuse.rusage.into();
+        if let Ok(r) = PbAny::from_msg::<PosixResourceUsage>(&pbres) {
+            runresp.resource_usage = vec![r];
+        };
 
         Ok(tonic::Response::new(runresp))
     }
