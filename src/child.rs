@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
 use std::num::NonZeroU64;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
@@ -417,27 +417,14 @@ fn netlink_create_dummy(name: &str) -> Result<()> {
         ifi_change: u32,
     }
 
-    let nl_fd = unsafe {
-        libc::socket(libc::AF_NETLINK, libc::SOCK_RAW | libc::SOCK_CLOEXEC, libc::NETLINK_ROUTE)
-    };
-    if nl_fd < 0 {
-        return Err(Error::last_os_error());
-    }
-    // Wrap so it auto-closes on all exit paths.
-    let nl_fd = unsafe { OwnedFd::from_raw_fd(nl_fd) };
+    let nl_fd: OwnedFd = socket::socket(
+        AddressFamily::Netlink,
+        SockType::Raw,
+        SockFlag::SOCK_CLOEXEC,
+        SockProtocol::NetlinkRoute,
+    )?;
 
-    let mut sa: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-    sa.nl_family = libc::AF_NETLINK as u16;
-    if unsafe {
-        libc::bind(
-            nl_fd.as_raw_fd(),
-            &sa as *const _ as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_nl>() as u32,
-        )
-    } < 0
-    {
-        return Err(Error::last_os_error());
-    }
+    let _ = socket::bind(nl_fd.as_raw_fd(), &socket::NetlinkAddr::new(0, 0));
 
     // Helper: round up to the next multiple of 4 (NLA alignment).
     fn nla_align(len: usize) -> usize {
@@ -497,9 +484,7 @@ fn netlink_create_dummy(name: &str) -> Result<()> {
     buf[payload_start..payload_start + info_kind_payload.len()].copy_from_slice(info_kind_payload);
 
     // Send
-    if unsafe { libc::send(nl_fd.as_raw_fd(), buf.as_ptr() as *const _, buf.len(), 0) } < 0 {
-        return Err(Error::last_os_error());
-    }
+    let _ = socket::send(nl_fd.as_raw_fd(), buf.as_slice(), socket::MsgFlags::empty())?;
 
     // Read ACK
     let mut resp = [0u8; 1024];
