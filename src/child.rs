@@ -363,6 +363,10 @@ fn remount_all_readonly(rw_paths: &[String]) -> Result<()> {
     Ok(())
 }
 
+// SIOCSIFFLAGS is a "bad" ioctl because it uses a raw constant
+// rather than the encoded _IOW type.
+nix::ioctl_write_ptr_bad!(ioctl_set_ifflags, libc::SIOCSIFFLAGS, ifreq);
+
 fn net_loopback_up() -> Result<()> {
     let sock: OwnedFd = socket::socket(
         AddressFamily::Inet,
@@ -378,8 +382,8 @@ fn net_loopback_up() -> Result<()> {
 
     unsafe {
         ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16;
-        libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS as _, &ifr);
-    };
+        ioctl_set_ifflags(sock.as_raw_fd(), &ifr)?;
+    }
 
     Ok(())
 }
@@ -488,15 +492,12 @@ fn netlink_create_dummy(name: &str) -> Result<()> {
 
     // Read ACK
     let mut resp = [0u8; 1024];
-    let n = unsafe { libc::recv(nl_fd.as_raw_fd(), resp.as_mut_ptr() as *mut _, resp.len(), 0) };
-    if n < 0 {
-        return Err(Error::last_os_error());
-    }
-    if (n as usize) >= std::mem::size_of::<libc::nlmsghdr>() {
+    let n = socket::recv(nl_fd.as_raw_fd(), resp.as_mut_slice(), socket::MsgFlags::empty())?;
+    if n >= std::mem::size_of::<libc::nlmsghdr>() {
         let resp_hdr = unsafe { &*(resp.as_ptr() as *const libc::nlmsghdr) };
         if resp_hdr.nlmsg_type == libc::NLMSG_ERROR as u16 {
             let err_offset = std::mem::size_of::<libc::nlmsghdr>();
-            if (n as usize) >= err_offset + 4 {
+            if n >= err_offset + 4 {
                 let errno = unsafe { *(resp.as_ptr().add(err_offset) as *const i32) };
                 if errno != 0 {
                     return Err(Error::from_raw_os_error(-errno));
@@ -510,6 +511,7 @@ fn netlink_create_dummy(name: &str) -> Result<()> {
 
 /// Configure a network interface: set IP address, netmask, and bring it up.
 fn setup_net_interface(name: &str, cfg: &NetInterfaceConfig) -> Result<()> {
+    info!("Setup Net Interface, name = {}", name);
     let sock: OwnedFd = socket::socket(
         AddressFamily::Inet,
         SockType::Datagram,
@@ -538,9 +540,7 @@ fn setup_net_interface(name: &str, cfg: &NetInterfaceConfig) -> Result<()> {
         flags |= libc::IFF_MULTICAST as i16;
     }
     ifr.ifr_ifru.ifru_flags = flags;
-    if unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS as _, &ifr) } < 0 {
-        return Err(Error::last_os_error());
-    }
+    unsafe { ioctl_set_ifflags(sock.as_raw_fd(), &ifr)?; }
 
     Ok(())
 }
@@ -592,10 +592,10 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
         None::<&'static str>,
     )?;
 
-    remount_all_readonly(child_data.rw_paths)?;
-    mount_hidden_paths(child_data.hidden_paths, child_data.rw_paths)?;
     net_loopback_up()?;
     setup_net_interfaces(child_data.net_interfaces)?;
+    remount_all_readonly(child_data.rw_paths)?;
+    mount_hidden_paths(child_data.hidden_paths, child_data.rw_paths)?;
 
     info!("From child!! pid = {} uid = {}", pid, unistd::getuid());
 
