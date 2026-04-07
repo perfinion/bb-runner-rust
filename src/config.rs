@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::convert::AsRef;
 use std::env;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-//use std::sync::Arc;
 use rsjsonnet_front::Session;
 use rsjsonnet_lang::arena::Arena;
 use rsjsonnet_lang::program::Value;
@@ -66,7 +66,7 @@ pub(crate) struct Configuration {
     pub build_directory_path: PathBuf,
     pub grpc_listen_path: PathBuf,
     pub num_cpus: u32,
-    pub memory_max: u32,
+    pub memory_max: Option<NonZeroU64>,
     pub rw_paths: Vec<String>,
     #[serde(default)]
     pub hidden_paths: Vec<String>,

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
+use std::num::NonZeroU64;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
@@ -53,7 +54,7 @@ pub(crate) struct Command {
     cgroup: Option<String>,
     cgroup_root: Option<PathBuf>,
     cgroup_path: Option<String>,
-    mem_max: Option<u32>,
+    mem_max: Option<NonZeroU64>,
     namespaces: CloneFlags,
     rw_paths: Vec<String>,
     hidden_paths: Vec<String>,
@@ -157,8 +158,8 @@ impl Command {
         self
     }
 
-    pub fn memory_max(&mut self, m: u32) -> &mut Command {
-        self.mem_max = Some(m);
+    pub fn memory_max(&mut self, m: Option<NonZeroU64>) -> &mut Command {
+        self.mem_max = m;
         self
     }
 

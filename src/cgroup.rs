@@ -1,5 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Result, Write};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use nix::unistd::Pid;
@@ -121,7 +122,7 @@ pub(crate) fn setup_delegation() -> Result<PathBuf> {
 pub(crate) fn move_child_cgroup(
     pid: Pid,
     jobcpu: &str,
-    mem_max: Option<u32>,
+    mem_max: Option<NonZeroU64>,
     cgroup_root: Option<&Path>,
     cgroup_path: Option<&str>,
 ) -> Result<()> {
@@ -136,7 +137,7 @@ pub(crate) fn move_child_cgroup(
 fn move_child_cgroup_v2(
     pid: Pid,
     jobcpu: &str,
-    mem_max: Option<u32>,
+    mem_max: Option<NonZeroU64>,
     cgroup_root: Option<&Path>,
     cgroup_path: Option<&str>,
 ) -> Result<()> {
@@ -160,7 +161,7 @@ fn move_child_cgroup_v2(
     Ok(())
 }
 
-fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<u32>, cgroup_path: Option<&str>) -> Result<()> {
+fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgroup_path: Option<&str>) -> Result<()> {
     let cgroup_name = cgroup_path.unwrap_or("bb_runner");
     // Cgroup v1 has many separate hierarchies
     let memory_cgroup_root = Path::new("/sys/fs/cgroup/memory").join(cgroup_name);
