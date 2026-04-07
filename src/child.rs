@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, Result, Write};
 use std::num::NonZeroU64;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitStatus};
@@ -66,8 +66,8 @@ pub(crate) struct Command {
 struct ChildData<'a> {
     cmd: &'a mut process::Command,
     read_pipe: BorrowedFd<'a>,
-    stdout: Option<RawFd>,
-    stderr: Option<RawFd>,
+    stdout: Option<BorrowedFd<'a>>,
+    stderr: Option<BorrowedFd<'a>>,
     hostname: Option<&'a str>,
     rw_paths: &'a Vec<String>,
     hidden_paths: &'a Vec<String>,
@@ -108,8 +108,8 @@ impl Command {
         let mut child_data = ChildData {
             cmd: &mut self.inner,
             read_pipe: read_pipe.as_fd(),
-            stdout: self.stdout.as_ref().map(|s| s.as_raw_fd()),
-            stderr: self.stderr.as_ref().map(|s| s.as_raw_fd()),
+            stdout: self.stdout.as_ref().map(|s| s.as_fd()),
+            stderr: self.stderr.as_ref().map(|s| s.as_fd()),
             hostname: self.hostname.as_ref().map(String::as_ref),
             rw_paths: self.rw_paths.as_ref(),
             hidden_paths: self.hidden_paths.as_ref(),
@@ -578,7 +578,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 
     // Block until the parent has configured our uid_map
     let mut buf = [0; 4];
-    let _ = unistd::read(child_data.read_pipe.as_raw_fd(), &mut buf);
+    let _ = unistd::read(child_data.read_pipe, &mut buf);
     info!("Read from pipe: {:?}", buf);
 
     // cd / before mounting in case we were keeping something busy
@@ -615,10 +615,10 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
 
     // Setup child stdio and close everything else
     if let Some(stdout) = child_data.stdout {
-        let _ = unistd::dup2(stdout, libc::STDOUT_FILENO)?;
+        let _ = unistd::dup2_stdout(stdout)?;
     }
     if let Some(stderr) = child_data.stderr {
-        let _ = unistd::dup2(stderr, libc::STDERR_FILENO)?;
+        let _ = unistd::dup2_stderr(stderr)?;
     }
     close_range_fds((libc::STDERR_FILENO as c_uint) + 1)?;
 
