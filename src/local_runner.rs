@@ -111,6 +111,19 @@ pub(crate) fn spawn_child(
     stdcmd.envs(&run.environment_variables);
     stdcmd.env("TMP", &tmpdir);
     stdcmd.env("HOME", &homedir);
+
+    for (var, ov) in &child_cfg.env_overrides {
+        let Some(base) = run.environment_variables.get(var) else { continue };
+        let mut val = String::new();
+        if let Some(ref p) = ov.prepend {
+            val.push_str(p);
+        }
+        val.push_str(base);
+        if let Some(ref a) = ov.append {
+            val.push_str(a);
+        }
+        stdcmd.env(var, &val);
+    }
     stdcmd.stdin(Stdio::null());
     stdcmd.stdout(Stdio::inherit());
     stdcmd.stderr(Stdio::inherit());

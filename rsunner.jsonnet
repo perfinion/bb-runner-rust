@@ -11,4 +11,7 @@
   cgroup: {
     delegation: true,
   },
+  envOverrides: {
+    PATH: { prepend: '/run/bb/bin:' },
+  },
 }

@@ -19,6 +19,17 @@ fn default_cgroup_path() -> String {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct EnvOverride {
+    /// Value prepended to the existing env var (e.g. "/run/bb/bin:" for PATH).
+    #[serde(default)]
+    pub prepend: Option<String>,
+    /// Value appended to the existing env var.
+    #[serde(default)]
+    pub append: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CgroupConfig {
     #[serde(default)]
     pub delegation: bool,
@@ -84,6 +95,8 @@ pub(crate) struct Configuration {
     pub cgroup_root: Option<Arc<PathBuf>>,
     #[serde(skip)]
     pub cgroup_path: Option<String>,
+    #[serde(default)]
+    pub env_overrides: HashMap<String, EnvOverride>,
 }
 
 fn add_var(session: &mut Session, name: &str, val: &str) -> Option<()> {
