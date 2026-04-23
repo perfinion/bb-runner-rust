@@ -90,8 +90,7 @@ impl std::convert::From<process::Command> for Command {
             namespaces: CloneFlags::CLONE_NEWPID
                 | CloneFlags::CLONE_NEWIPC
                 | CloneFlags::CLONE_NEWNET
-                | CloneFlags::CLONE_NEWNS
-                | CloneFlags::CLONE_NEWUSER,
+                | CloneFlags::CLONE_NEWNS,
             rw_paths: Vec::new(),
             hidden_paths: Vec::new(),
             net_interfaces: HashMap::new(),
@@ -118,15 +117,20 @@ impl Command {
             run_as_group: self.run_as_group,
         };
 
+        trace!("cloning child");
         let pid = clone_pid1(self.namespaces, &mut child_data)?;
         drop(read_pipe);
 
-        write_uid_map(pid, unistd::getuid(), self.run_as_user)?;
-        write_gid_map(pid, unistd::getgid(), self.run_as_group)?;
+        if self.namespaces.contains(CloneFlags::CLONE_NEWUSER) {
+            trace!("Setting up user namespace mappings");
+            write_uid_map(pid, unistd::getuid(), self.run_as_user)?;
+            write_gid_map(pid, unistd::getgid(), self.run_as_group)?;
+        }
         if let Some(cg) = self.cgroup.as_ref().map(String::as_ref) {
             crate::cgroup::move_child_cgroup(pid, cg, self.mem_max, self.cgroup_root.as_deref(), self.cgroup_path.as_deref())?;
         }
 
+        trace!("Continuing child");
         unistd::write(write_pipe, b"A")?;
 
         Ok(Child { pid })
@@ -189,12 +193,27 @@ impl Command {
         self
     }
 
+    pub fn user_namespace(&mut self, enable: bool) -> &mut Command {
+        if enable {
+            self.namespaces |= CloneFlags::CLONE_NEWUSER;
+        } else {
+            self.namespaces -= CloneFlags::CLONE_NEWUSER;
+        }
+        self
+    }
+
     pub fn run_as_user(&mut self, uid: Option<u32>) -> &mut Command {
+        if let Some(u) = uid {
+            self.inner.uid(u);
+        }
         self.run_as_user = uid;
         self
     }
 
     pub fn run_as_group(&mut self, gid: Option<u32>) -> &mut Command {
+        if let Some(g) = gid {
+            self.inner.gid(g);
+        }
         self.run_as_group = gid;
         self
     }
@@ -605,15 +624,6 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     }
     close_range_fds((libc::STDERR_FILENO as c_uint) + 1)?;
 
-    // Drop to the configured uid/gid for the build command.
-    // pid1 setup (mounts, network, etc.) has already completed as root.
-    if let Some(gid) = child_data.run_as_group {
-        child_data.cmd.gid(gid);
-    }
-    if let Some(uid) = child_data.run_as_user {
-        child_data.cmd.uid(uid);
-    }
-
     let mut child = child_data.cmd.spawn()?;
 
     // File descriptors are for child, close everything in pid1
@@ -630,6 +640,7 @@ fn child_pid1(child_data: &mut ChildData) -> Result<isize> {
     Ok(exitstatus.code().ok_or(Error::other("Child failed"))? as isize)
 }
 
+#[tracing::instrument(ret, skip(child_data))]
 fn clone_pid1(clone_flags: CloneFlags, child_data: &mut ChildData) -> Result<Pid> {
     let stack = StackMap::new(1024 * 1024)?; // 1 MB stacks
     info!("Stack: {:?}", stack);
