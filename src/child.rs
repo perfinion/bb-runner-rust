@@ -258,9 +258,10 @@ fn reset_signals() -> Result<()> {
 }
 
 fn close_range_fds(first: c_uint) -> Result<()> {
-    match unsafe { nix::libc::close_range(first, c_uint::MAX, 0) } {
+    // Use raw syscall – libc::close_range() is not available under musl.
+    match unsafe { libc::syscall(libc::SYS_close_range, first, c_uint::MAX, 0u32) } {
         0 => Ok(()),
-        -1 => Err(Error::from(nix::errno::Errno::last())),
+        -1 => Err(Error::last_os_error()),
         _ => Err(Error::other("close_range failed")),
     }
 }
@@ -377,7 +378,7 @@ fn net_loopback_up() -> Result<()> {
 
     unsafe {
         ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16;
-        libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS, &ifr);
+        libc::ioctl(sock.as_raw_fd(), libc::SIOCSIFFLAGS as _, &ifr);
     };
 
     Ok(())
