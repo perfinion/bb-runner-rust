@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let cgroup_root: Option<PathBuf> = match config.cgroup.as_ref() {
-        Some(cg) if cg.delegation => Some(cgroup::setup_delegation()?),
+        Some(cg) if cg.delegation => Some(cgroup::setup_delegation(&cg.path)?),
         _ => None,
     };
     config.cgroup_root = cgroup_root.map(|p| Arc::new(p));

@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
 use nix::unistd::Pid;
-use tracing::{info, warn};
+use tracing::{info, warn, trace};
 
 fn write_existing_file<P: AsRef<Path>, S: AsRef<str>>(path: P, contents: S) -> Result<()> {
     OpenOptions::new()
@@ -50,20 +50,72 @@ fn current_cgroup_v2() -> Result<PathBuf> {
     ))
 }
 
-/// Set up cgroup delegation for cgroup v2.
+/// Copy cpuset settings from `src` cgroup directory to `dst` cgroup directory.
 ///
-/// Moves the runner process into a child cgroup ("runner") so that sibling
-/// cgroups can be created for jobs. This is required because cgroup v2's
-/// "no internal process" constraint forbids a cgroup from both containing
-/// processes and having child cgroups with controllers enabled.
+/// In cgroupv1, newly created cpuset cgroups have empty `cpuset.cpus` and
+/// `cpuset.mems`. A PID cannot be moved into any cgroup in the hierarchy
+/// until these files are populated. This helper propagates the values
+/// downward from an ancestor cgroup.
 ///
-/// Returns the delegated cgroup root (the original cgroup) under which
-/// job cgroups will be created.
-pub(crate) fn setup_delegation() -> Result<PathBuf> {
+/// If `cpus` is `Some`, it is written as `cpuset.cpus` instead of inheriting
+/// from `src`. Pass `None` to inherit the value from `src` unchanged.
+fn copy_cpuset_settings(src: &Path, dst: &Path, cpus: Option<&str>) -> Result<()> {
+    let cpus_val = match cpus {
+        Some(c) => c.to_string(),
+        None => fs::read_to_string(src.join("cpuset.cpus"))
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    };
+    if !cpus_val.is_empty() {
+        write_existing_file(dst.join("cpuset.cpus"), &cpus_val)?;
+        trace!("Set cpuset.cpus={:?} on {:?}", cpus_val, dst);
+    }
+
+    let mems_val = fs::read_to_string(src.join("cpuset.mems"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !mems_val.is_empty() {
+        write_existing_file(dst.join("cpuset.mems"), &mems_val)?;
+        trace!("Copied cpuset.mems: {:?} -> {:?}", src, dst);
+    }
+
+    Ok(())
+}
+
+/// Set up cgroup delegation.
+///
+/// For cgroup v2: moves the runner process into a child cgroup ("runner") so
+/// that sibling cgroups can be created for jobs. This is required because
+/// cgroup v2's "no internal process" constraint forbids a cgroup from both
+/// containing processes and having child cgroups with controllers enabled.
+///
+/// For cgroup v1: creates the base cgroup directories and inherits cpuset
+/// settings from the root so that job cgroups can be created and accept PIDs.
+///
+/// Returns the delegated cgroup root under which job cgroups will be created.
+pub(crate) fn setup_delegation(cgroup_path: &str) -> Result<PathBuf> {
     let version = detect_cgroup_version()?;
 
     if version == CgroupVersion::V1 {
-        warn!("cgroup delegation is a v2 concept; ignoring on v1");
+        info!("cgroup v1: setting up base cgroup {:?} with inherited cpuset settings", cgroup_path);
+
+        // Create base cgroup directories in each v1 hierarchy
+        for controller in &["memory", "cpu,cpuacct", "cpuset"] {
+            let base_dir = Path::new("/sys/fs/cgroup").join(controller).join(cgroup_path);
+            if !base_dir.exists() {
+                fs::create_dir_all(&base_dir)?;
+                info!("Created base cgroup dir: {:?}", base_dir);
+            }
+        }
+
+        // Inherit cpuset settings from the root so job cgroups under this
+        // base can accept PIDs without further manual configuration.
+        let cpuset_root = Path::new("/sys/fs/cgroup/cpuset");
+        let cpuset_base = cpuset_root.join(cgroup_path);
+        copy_cpuset_settings(cpuset_root, &cpuset_base, None)?;
+
         return Ok(PathBuf::from("/sys/fs/cgroup"));
     }
 
@@ -168,13 +220,14 @@ fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgr
     let cpu_cgroup_root = Path::new("/sys/fs/cgroup/cpu,cpuacct").join(cgroup_name);
     let cpuset_cgroup_root = Path::new("/sys/fs/cgroup/cpuset").join(cgroup_name);
 
-    let job_name = format!("job{jobcpu}");
+    let job_name = format!("job{:02}", jobcpu);
 
     // Create cgroup directories in each hierarchy
     let memory_cgroup_dir = memory_cgroup_root.join(&job_name);
     let cpu_cgroup_dir = cpu_cgroup_root.join(&job_name);
     let cpuset_cgroup_dir = cpuset_cgroup_root.join(&job_name);
 
+    trace!("Creating cgroup dirs");
     if !memory_cgroup_dir.exists() {
         fs::create_dir_all(&memory_cgroup_dir)?;
     }
@@ -185,13 +238,12 @@ fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgr
         fs::create_dir_all(&cpuset_cgroup_dir)?;
     }
 
-    // Add process to each cgroup
-    write_existing_file(memory_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
-    write_existing_file(cpu_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
-    write_existing_file(cpuset_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
-
-    write_existing_file(cpuset_cgroup_dir.join("cpuset.cpus"), jobcpu)?;
+    trace!("Setting cpuset cpus");
+    // Inherit all settings from the base cgroup, using the job-specific CPUs
+    // for cpuset.cpus instead of the base value.
+    copy_cpuset_settings(&cpuset_cgroup_root, &cpuset_cgroup_dir, Some(jobcpu))?;
     write_existing_file(memory_cgroup_dir.join("memory.swappiness"), "0")?;
+    trace!("Setting mem max");
     if let Some(m) = mem_max {
         write_existing_file(
             memory_cgroup_dir.join("memory.limit_in_bytes"),
@@ -202,6 +254,14 @@ fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgr
             m.to_string(),
         )?;
     }
+
+    // Add process to each cgroup
+    trace!("Moving to cgroup memory");
+    write_existing_file(memory_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+    //trace!("Moving to cgroup cpu");
+    //write_existing_file(cpu_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+    trace!("Moving to cgroup cpuset");
+    write_existing_file(cpuset_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
 
     Ok(())
 }
