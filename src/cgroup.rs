@@ -196,7 +196,7 @@ fn move_child_cgroup_v2(
     let cgroup_name = cgroup_path.unwrap_or("bb_runner");
     let default_root = PathBuf::from("/sys/fs/cgroup").join(cgroup_name);
     let cgroup_root = cgroup_root.unwrap_or(&default_root);
-    let cgroup_dir: PathBuf = cgroup_root.join(format!("job{jobcpu}"));
+    let cgroup_dir: PathBuf = cgroup_root.join(format!("job{:0>2}", jobcpu));
     if !cgroup_dir.exists() {
         fs::create_dir(&cgroup_dir)?;
     }
@@ -220,7 +220,7 @@ fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgr
     let cpu_cgroup_root = Path::new("/sys/fs/cgroup/cpu,cpuacct").join(cgroup_name);
     let cpuset_cgroup_root = Path::new("/sys/fs/cgroup/cpuset").join(cgroup_name);
 
-    let job_name = format!("job{:02}", jobcpu);
+    let job_name = format!("job{:0>2}", jobcpu);
 
     // Create cgroup directories in each hierarchy
     let memory_cgroup_dir = memory_cgroup_root.join(&job_name);
@@ -258,8 +258,8 @@ fn move_child_cgroup_v1(pid: Pid, jobcpu: &str, mem_max: Option<NonZeroU64>, cgr
     // Add process to each cgroup
     trace!("Moving to cgroup memory");
     write_existing_file(memory_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
-    //trace!("Moving to cgroup cpu");
-    //write_existing_file(cpu_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
+    trace!("Moving to cgroup cpu");
+    write_existing_file(cpu_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
     trace!("Moving to cgroup cpuset");
     write_existing_file(cpuset_cgroup_dir.join("cgroup.procs"), pid.to_string())?;
 
