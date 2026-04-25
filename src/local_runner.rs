@@ -85,7 +85,7 @@ pub(crate) async fn wait_child(
 
 #[tracing::instrument(skip(run))]
 pub(crate) fn spawn_child(
-    processor: u32,
+    processor: &str,
     child_cfg: &Configuration,
     run: &RunRequest,
 ) -> TonicResult<Child> {
@@ -132,7 +132,7 @@ pub(crate) fn spawn_child(
     c.stdout(stdout_file);
     c.stderr(stderr_file);
     c.hostname("localhost");
-    c.cgroup(processor.to_string());
+    c.cgroup(processor);
     if let Some(ref root) = child_cfg.cgroup_root {
         c.cgroup_root(root.as_ref().clone());
     }

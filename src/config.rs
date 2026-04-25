@@ -76,7 +76,8 @@ fn parse_cidr(addr: &str) -> Option<(u32, u32)> {
 pub(crate) struct Configuration {
     pub build_directory_path: PathBuf,
     pub grpc_listen_path: PathBuf,
-    pub num_cpus: u32,
+    pub cpus: Vec<String>,
+    #[serde(default)]
     pub memory_max: Option<NonZeroU64>,
     pub rw_paths: Vec<String>,
     #[serde(default)]
@@ -111,11 +112,14 @@ impl Configuration {
     pub fn new<P: AsRef<Path>>(cfg: P) -> Option<Configuration> {
         warn!("Loading configuration from: {:?}", cfg.as_ref());
 
+        let nproc = thread::available_parallelism().map_or(1, |p| p.get());
+
         let arena = Arena::new();
         let mut session = Session::new(&arena);
         if let Some(pwd) = env::current_dir().ok()?.to_str() {
             add_var(&mut session, "PWD", pwd);
         }
+        add_var(&mut session, "NPROC", &nproc.to_string());
 
         let Some(thunk) = session.load_real_file(cfg.as_ref()) else {
             // `Session` printed the error for us
@@ -139,9 +143,9 @@ impl Configuration {
 
         let mut config: Configuration = serde_json::from_str::<Configuration>(&json_result).ok()?;
 
-        if config.num_cpus == 0 {
-            config.num_cpus = thread::available_parallelism().map_or(1, |p| p.get() as u32);
-            info!("Number of processors = {}", config.num_cpus);
+        if config.cpus.is_empty() {
+            config.cpus = (0..nproc).map(|i| i.to_string()).collect();
+            info!("Number of processors = {}", config.cpus.len());
         }
 
         for (name, iface) in config.net_interfaces.iter_mut() {

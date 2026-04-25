@@ -20,7 +20,7 @@ use crate::local_runner::{spawn_child, wait_child};
 use crate::resource::ExitResources;
 
 #[derive(Clone, Debug)]
-struct ProcessorQueue(Arc<Mutex<VecDeque<u32>>>);
+struct ProcessorQueue(Arc<Mutex<VecDeque<String>>>);
 
 #[derive(Debug)]
 pub(crate) struct RunnerService {
@@ -29,18 +29,18 @@ pub(crate) struct RunnerService {
 }
 
 impl ProcessorQueue {
-    pub fn new(deque: VecDeque<u32>) -> Self {
+    pub fn new(deque: VecDeque<String>) -> Self {
         Self(Arc::new(Mutex::new(deque)))
     }
 
-    pub async fn take_cpu(&self) -> TonicResult<u32> {
+    pub async fn take_cpu(&self) -> TonicResult<String> {
         let m = self.0.clone();
         let mut q = m.lock().await;
         q.pop_front()
             .ok_or(Status::resource_exhausted("No available concurrency slots"))
     }
 
-    pub async fn give_cpu(&self, cpu: u32) {
+    pub async fn give_cpu(&self, cpu: String) {
         let m = self.0.clone();
         let mut q = m.lock().await;
         q.push_back(cpu)
@@ -49,11 +49,10 @@ impl ProcessorQueue {
 
 impl RunnerService {
     pub fn new(config: Configuration) -> RunnerService {
-        let p: Vec<u32> = (0..config.num_cpus).collect();
+        let p: VecDeque<String> = config.cpus.iter().cloned().collect();
         Self {
             config,
-            // builddir: PathBuf::from(builddir.as_ref()).join("build"),
-            processors: ProcessorQueue::new(p.into()),
+            processors: ProcessorQueue::new(p),
         }
     }
 }
@@ -109,7 +108,7 @@ impl Runner for RunnerService {
 
         let childtask: JoinHandle<TonicResult<ExitResources>> = tokio::spawn(async move {
             let processor = procque.take_cpu().await?;
-            let mut child = match spawn_child(processor, &child_cfg, &run) {
+            let mut child = match spawn_child(&processor, &child_cfg, &run) {
                 Ok(child) => child,
                 Err(e) => {
                     procque.give_cpu(processor).await;
@@ -123,7 +122,7 @@ impl Runner for RunnerService {
             info!("\nChild {} exit = {:#?}", pid, exit_resuse);
 
             if let Some(ref root) = child_cfg.cgroup_root {
-                crate::cgroup::cleanup_job_cgroup(root, &processor.to_string(), child_cfg.cgroup_path.as_deref());
+                crate::cgroup::cleanup_job_cgroup(root, &processor, child_cfg.cgroup_path.as_deref());
             }
 
             procque.give_cpu(processor).await;
