@@ -2,6 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Result, Write};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use nix::unistd::Pid;
 use tracing::{info, warn, trace};
@@ -14,19 +15,25 @@ fn write_existing_file<P: AsRef<Path>, S: AsRef<str>>(path: P, contents: S) -> R
         .and_then(|mut f| f.write_all(contents.as_ref().as_bytes()))
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) enum CgroupVersion {
     V1,
     V2,
 }
 
 pub(crate) fn detect_cgroup_version() -> Result<CgroupVersion> {
-    // Check if cgroup v2 is mounted at /sys/fs/cgroup
-    // cgroup v2 has a unified hierarchy with cgroup.controllers
-    if Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
-        Ok(CgroupVersion::V2)
-    } else {
-        Ok(CgroupVersion::V1)
+    static INIT: Once = Once::new();
+    static mut VERSION: CgroupVersion = CgroupVersion::V1;
+
+    unsafe {
+        INIT.call_once(|| {
+            // Check if cgroup v2 is mounted at /sys/fs/cgroup
+            // cgroup v2 has a unified hierarchy with cgroup.controllers
+            if Path::new("/sys/fs/cgroup/cgroup.controllers").exists() {
+                VERSION = CgroupVersion::V2;
+            }
+        });
+        Ok(VERSION)
     }
 }
 
