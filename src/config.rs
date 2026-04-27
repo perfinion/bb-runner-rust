@@ -116,6 +116,11 @@ impl Configuration {
 
         let arena = Arena::new();
         let mut session = Session::new(&arena);
+
+        for (env_key, env_val) in std::env::vars() {
+            add_var(&mut session, &env_key, &env_val);
+        }
+
         if let Some(pwd) = env::current_dir().ok()?.to_str() {
             add_var(&mut session, "PWD", pwd);
         }
