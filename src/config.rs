@@ -118,7 +118,9 @@ impl Configuration {
         let mut session = Session::new(&arena);
 
         for (env_key, env_val) in std::env::vars() {
-            add_var(&mut session, &env_key, &env_val);
+            if env_key != "PWD" && env_key != "NPROC" {
+                add_var(&mut session, &env_key, &env_val);
+            }
         }
 
         if let Some(pwd) = env::current_dir().ok()?.to_str() {
