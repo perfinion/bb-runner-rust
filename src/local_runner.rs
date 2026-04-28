@@ -93,7 +93,14 @@ pub(crate) fn spawn_child(
 
     let ird = builddir.join(&run.input_root_directory);
     let cwd = ird.join(&run.working_directory);
-    let arg0 = cwd.join(&run.arguments[0]);
+    // Command::new takes either an abs path or looks up in $PATH. Does not do relative path
+    // lookups. If the relative path exists, use that, otherwise let $PATH lookup sort it out.
+    // Note: cwd.join(p) discards cwd if p is absolute already.
+    let relarg0 = cwd.join(&run.arguments[0]);
+    let arg0: &str = match relarg0.try_exists() {
+        Ok(true) => relarg0.to_str().unwrap_or(&run.arguments[0]),
+        _ => &run.arguments[0],
+    };
     let tmpdir = builddir.join(&run.temporary_directory).join("tmp");
     let homedir = builddir.join(&run.temporary_directory).join("home");
     fs::create_dir(&tmpdir).map_err(|_| Status::internal("Failed to create tmpdir"))?;
